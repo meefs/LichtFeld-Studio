@@ -15,6 +15,7 @@
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/colmap.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/core/parameter_manager.hpp"
@@ -33,6 +34,7 @@
 #include <charconv>
 #include <cmath>
 #include <format>
+#include <filesystem>
 #include <functional>
 #include <glm/mat4x4.hpp>
 #include <optional>
@@ -101,6 +103,64 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::string formatDp(const int value) {
             return std::to_string(value) + "dp";
+        }
+
+        [[nodiscard]] lfs::io::Result<std::filesystem::path> colmapSparseSourcePath(
+            const lfs::vis::SceneManager& scene_manager) {
+            const auto dataset_path = scene_manager.getDatasetPath();
+            if (dataset_path.empty()) {
+                return lfs::io::make_error(lfs::io::ErrorCode::PATH_NOT_FOUND,
+                                           "COLMAP export requires a source dataset path",
+                                           dataset_path);
+            }
+
+            return lfs::io::find_colmap_sparse_model_path(dataset_path);
+        }
+
+        enum class ColmapSparseOutputFormat : uint8_t {
+            Binary,
+            Text,
+        };
+
+        [[nodiscard]] ColmapSparseOutputFormat colmapSparseOutputFormat(
+            const std::filesystem::path& source_sparse_path) {
+            std::error_code ec;
+            const bool has_binary_pair =
+                std::filesystem::exists(source_sparse_path / "cameras.bin", ec) &&
+                std::filesystem::exists(source_sparse_path / "images.bin", ec);
+            return has_binary_pair ? ColmapSparseOutputFormat::Binary
+                                   : ColmapSparseOutputFormat::Text;
+        }
+
+        [[nodiscard]] std::array<std::string_view, 3> colmapSparseOutputFileNames(
+            const ColmapSparseOutputFormat format) {
+            if (format == ColmapSparseOutputFormat::Binary) {
+                return {"cameras.bin", "images.bin", "points3D.bin"};
+            }
+            return {"cameras.txt", "images.txt", "points3D.txt"};
+        }
+
+        [[nodiscard]] bool colmapSparseDataExists(const std::filesystem::path& output_path) {
+            constexpr std::array<std::string_view, 6> file_names{
+                "cameras.bin",
+                "images.bin",
+                "points3D.bin",
+                "cameras.txt",
+                "images.txt",
+                "points3D.txt",
+            };
+            for (const std::string_view file_name : file_names) {
+                std::error_code ec;
+                if (std::filesystem::exists(output_path / std::string(file_name), ec)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] std::string colmapSparseOutputFileList(
+            const std::array<std::string_view, 3>& file_names) {
+            return std::format("{}, {}, and {}", file_names[0], file_names[1], file_names[2]);
         }
 
         [[nodiscard]] float currentDpRatio(const Rml::Element* element) {
@@ -1694,9 +1754,15 @@ namespace lfs::vis::gui {
                     prefixedAction(std::format("disable_all_train:{}", node_id))));
                 break;
             case core::NodeType::DATASET:
+                if (colmapSparseSourcePath(*scene_manager)) {
+                    items.push_back(makeAction(
+                        "Export COLMAP sparse...",
+                        prefixedAction("export_colmap")));
+                }
                 items.push_back(makeAction(
                     tr(string_keys::Scene::DELETE_ITEM),
-                    prefixedAction(std::format("delete:{}", node_id))));
+                    prefixedAction(std::format("delete:{}", node_id)),
+                    !items.empty()));
                 break;
             case core::NodeType::CROPBOX:
                 items.push_back(makeAction(tr("common.apply"), prefixedAction("apply_cropbox")));
@@ -1923,6 +1989,64 @@ namespace lfs::vis::gui {
             }
         } else if (kind == "add_group_root") {
             cmd::AddGroup{.name = tr("scene.new_group_name"), .parent_name = ""}.emit();
+        } else if (kind == "export_colmap") {
+            auto* gui = services().guiOrNull();
+            if (!gui)
+                return;
+
+            auto path_result = colmapSparseSourcePath(*scene_manager);
+            if (!path_result) {
+                const std::string error = path_result.error().format();
+                LOG_ERROR("COLMAP export failed: {}", error);
+                state::ExportFailed{.error = error}.emit();
+                return;
+            }
+
+            const auto selected_path = PickColmapSparseFolderDialog(*path_result);
+            if (selected_path.empty()) {
+                return;
+            }
+
+            // The folder picker result is the export destination. Do not rewrite a selected
+            // sparse root to sparse/0; overwrite checks and writes must hit the same folder.
+            const auto output_path = selected_path;
+            const std::string output_path_text = lfs::core::path_to_utf8(output_path);
+            const auto output_format = colmapSparseOutputFormat(*path_result);
+            const auto output_file_names = colmapSparseOutputFileNames(output_format);
+            const std::string output_file_list = colmapSparseOutputFileList(output_file_names);
+
+            if (!colmapSparseDataExists(output_path)) {
+                gui->asyncTasks().performExport(core::ExportFormat::COLMAP, output_path, {}, 0);
+                return;
+            }
+
+            LOG_INFO("Confirming COLMAP sparse overwrite folder: {}", output_path_text);
+
+            const std::string export_button = "Overwrite";
+            lfs::core::ModalRequest request;
+            request.title = "Export COLMAP sparse";
+            request.style = lfs::core::ModalStyle::Warning;
+            request.width_dp = 560;
+            request.body_rml =
+                std::string("<div>COLMAP export will overwrite existing sparse reconstruction data in:</div>") +
+                "<div class=\"content-row\" style=\"margin-top: 8dp;\">"
+                "<span class=\"dim-text\">Folder </span>" +
+                encode(output_path_text) +
+                "</div>"
+                "<div class=\"warning-text\" style=\"margin-top: 8dp;\">"
+                "This writes " +
+                encode(output_file_list) +
+                "</div>";
+            request.buttons = {
+                {"Cancel", "secondary"},
+                {export_button, "warning"},
+            };
+            request.on_result = [gui, output_path, export_button](const lfs::core::ModalResult& result) {
+                if (result.button_label == export_button) {
+                    gui->asyncTasks().performExport(core::ExportFormat::COLMAP, output_path, {}, 0);
+                }
+            };
+            gui->enqueueModal(std::move(request));
         } else if ((kind == "add_cropbox" || kind == "add_ellipsoid" || kind == "save_node") && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (!parseNodeId(parts[1], node_id))
