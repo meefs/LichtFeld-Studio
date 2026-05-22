@@ -25,13 +25,20 @@ struct rectangle {
 
 enum CameraModel {
     PINHOLE = 0,
-    OPENCV = 1,
+    ORTHO = 1,
     FISHEYE = 2,
+    OPENCV = 5,
 };
 
 static const uint CAMERA_MODEL_MASK = 0xffu;
 static const uint PROJECTION_MODE_SHIFT = 8u;
 static const uint PROJECTION_MODE_GUT = 1u;
+
+[ForceInline]
+[Differentiable]
+float sigmoid_activation(float x) {
+    return 1.0f / (1.0f + exp(-x));
+}
 
 [ForceInline]
 uint base_camera_model(uint packed_camera_model) {
@@ -158,6 +165,16 @@ float3 project_point_pinhole(float3 point, Camera cam) {
 }
 
 [Differentiable]
+float3 project_point_ortho(float3 point, Camera cam) {
+    float3 view_point = geom_transform_points(point, cam.world_view_transform);
+    return {
+        cam.fx * view_point.x + cam.cx,
+        cam.fy * view_point.y + cam.cy,
+        view_point.z
+    };
+}
+
+[Differentiable]
 float3x3 compute_jacobian_pinhole(float3 xyz_ws, Camera cam) {
     float tan_fovx = 0.5f * cam.W / cam.fx;
     float tan_fovy = 0.5f * cam.H / cam.fy;
@@ -178,6 +195,13 @@ float3x3 compute_jacobian_pinhole(float3 xyz_ws, Camera cam) {
                           0.0, 0.0, 0.0);
 
     return J;
+}
+
+[Differentiable]
+float3x3 compute_jacobian_ortho(float3 xyz_ws, Camera cam) {
+    return float3x3(cam.fx, 0.0, 0.0,
+                    0.0, cam.fy, 0.0,
+                    0.0, 0.0, 0.0);
 }
 
 [ForceInline]
@@ -389,6 +413,8 @@ float3 project_point(float3 point, Camera cam) {
         return project_point_fisheye(point, cam);
     else if (cam.model == int(CameraModel::OPENCV))
         return project_point_opencv(point, cam);
+    else if (cam.model == int(CameraModel::ORTHO))
+        return project_point_ortho(point, cam);
     else
         return project_point_pinhole(point, cam);
 }
@@ -400,6 +426,8 @@ float3x3 compute_jacobian(float3 xyz_ws, Camera cam) {
     else if (cam.model == int(CameraModel::OPENCV))
         // return compute_jacobian_opencv(xyz_ws, cam);
         return compute_jacobian_pinhole(xyz_ws, cam);  // TODO
+    else if (cam.model == int(CameraModel::ORTHO))
+        return compute_jacobian_ortho(xyz_ws, cam);
     else
         return compute_jacobian_pinhole(xyz_ws, cam);
 }
@@ -434,12 +462,28 @@ WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
         uv = undistort_point_kkpp(uv, cam.dist_coeffs);
     }
 
-    float3 ray_camera = safe_normalize(float3(uv, 1.0f));
     float4x3 world_view_t = transpose(cam.world_view_transform);
     float3x3 view_to_world_rotation = float3x3(world_view_t);
-    float3 origin = -mul(view_to_world_rotation, world_view_t[3]);
+    float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
+    float3 ray_camera = cam.model == int(CameraModel::ORTHO)
+                            ? float3(0.0f, 0.0f, 1.0f)
+                            : safe_normalize(float3(uv, 1.0f));
+    float3 origin = cam.model == int(CameraModel::ORTHO)
+                        ? camera_origin + mul(view_to_world_rotation, float3(uv, 0.0f))
+                        : camera_origin;
     float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
     return { origin, direction, isfinite(dot(origin, origin)) && isfinite(dot(direction, direction)) };
+}
+
+[ForceInline]
+float3 view_direction_to_point(float3 world_point, Camera cam) {
+    float4x3 world_view_t = transpose(cam.world_view_transform);
+    float3x3 view_to_world_rotation = float3x3(world_view_t);
+    if (cam.model == int(CameraModel::ORTHO)) {
+        return safe_normalize(mul(view_to_world_rotation, float3(0.0f, 0.0f, 1.0f)));
+    }
+    float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
+    return safe_normalize(world_point - camera_origin);
 }
 
 [ForceInline]
@@ -555,22 +599,24 @@ Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
     int32_t g_idx,
     StructuredBuffer<float> xyz_ws,
     StructuredBuffer<float4> rotations,
-    StructuredBuffer<float4> scales_opacs,
+    StructuredBuffer<float> scaling_raw,
+    StructuredBuffer<float> opacity_raw,
     StructuredBuffer<float> rgb
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
     float4 g_rotation = rotations[g_idx];
-    float4 g_scale_opac = scales_opacs[g_idx];
+    float3 g_scale = exp(read_t3_float3(g_idx, scaling_raw));
+    float g_opacity = sigmoid_activation(opacity_raw[g_idx]);
     float3 g_rgb = read_t3_float3(g_idx, rgb);
     float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
-    float3 safe_scale = max(g_scale_opac.xyz, float3(1e-8f));
+    float3 safe_scale = max(g_scale, float3(1e-8f));
     float3x3 inv_scale = float3x3(
         1.0f / safe_scale.x, 0.0f, 0.0f,
         0.0f, 1.0f / safe_scale.y, 0.0f,
         0.0f, 0.0f, 1.0f / safe_scale.z
     );
     float3x3 iscl_rot = mul(inv_scale, transpose(rotation));
-    return { g_xyz_ws, iscl_rot, g_scale_opac.w, g_rgb };
+    return { g_xyz_ws, iscl_rot, g_opacity, g_rgb };
 }
 
 [ForceInline]
@@ -862,6 +908,10 @@ struct Uniforms {
     uint active_sh;
     uint step;
     uint camera_model;
+    uint sort_capacity;
+    uint shN_layout_slots;
+    uint pad1;
+    uint pad2;
     float fx;
     float fy;
     float cx;

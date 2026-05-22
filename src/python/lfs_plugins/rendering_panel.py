@@ -104,7 +104,7 @@ SCRUB_FIELD_DEFS = {
 SELECT_PROPS = [
     "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
 ]
-GUT_RASTER_BACKENDS = {"3dgut", "vksplat_3dgut"}
+RASTER_BACKENDS = {"3dgs", "3dgut"}
 
 ENVIRONMENT_PRESET_PATHS = (
     "environments/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
@@ -149,7 +149,6 @@ LOCALE_KEY = {
     "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
     "equirectangular": "main_panel.equirectangular",
     "raster_backend": "main_panel.raster_backend",
-    "gut": "main_panel.gut_mode",
     "mip_filter": "main_panel.mip_filter",
     "axes_size": "main_panel.axes_size",
     "grid_opacity": "main_panel.grid_opacity",
@@ -204,6 +203,11 @@ def _entry_label(text: str) -> str:
     if not text:
         return ":"
     return text if text.endswith(":") else f"{text}:"
+
+
+def _normalize_raster_backend(value):
+    backend = str(value or "").lower()
+    return backend if backend in RASTER_BACKENDS else "3dgs"
 
 
 def _color_to_hex(c):
@@ -314,7 +318,7 @@ class RenderingPanel(Panel):
         for prop_id in SELECT_PROPS:
             if prop_id == "raster_backend":
                 model.bind(prop_id,
-                           lambda p=prop_id: str(getattr(s(), p, "")),
+                           lambda p=prop_id: _normalize_raster_backend(getattr(s(), p, "")),
                            lambda v: self._set_raster_backend(v))
             else:
                 model.bind(prop_id,
@@ -338,14 +342,6 @@ class RenderingPanel(Panel):
 
         model.bind_func("environment_enabled",
                         lambda: s() is not None and getattr(s(), "environment_mode", "") == "EQUIRECTANGULAR")
-
-        # vksplat is editing/viewing-only — hide the option from the raster
-        # backend dropdown as soon as a trainer is attached, regardless of
-        # training state (ready, paused, running). Its persistent Vulkan-side
-        # sort buffers grow unbounded under densification, which is intolerable
-        # when a dataset is in the loop.
-        model.bind_func("vksplat_available",
-                        lambda: not lf.has_trainer())
 
         all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + [
             "environment_mode", "environment_map_path", "ppisp_mode"
@@ -555,9 +551,8 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        backend = str(value)
+        backend = _normalize_raster_backend(value)
         settings.raster_backend = backend
-        settings.gut = backend in GUT_RASTER_BACKENDS
 
     def _environment_map_is_custom(self):
         settings = lf.get_render_settings()

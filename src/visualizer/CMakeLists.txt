@@ -250,7 +250,9 @@ if(ENABLE_VULKAN_VIEWER)
             PRIVATE
             gui/rmlui/rmlui_vk_backend.cpp
             rendering/vksplat_input_packer.cpp
+            rendering/vksplat_input_packer_cuda.cu
             rendering/vksplat_viewport_renderer.cpp
+            rendering/vulkan_external_tensor.cpp
             rendering/point_cloud_vulkan_renderer.cpp)
     set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
         CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
@@ -352,6 +354,8 @@ endif()
 target_compile_features(lfs_visualizer PUBLIC cxx_std_23)
 
 set_target_properties(lfs_visualizer PROPERTIES
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
@@ -376,10 +380,10 @@ endif()
 
 # Compiler options
 target_compile_options(lfs_visualizer PRIVATE
-        $<$<CXX_COMPILER_FRONTEND_VARIANT:GNU>:-Wall -Wextra -Wpedantic>
-        $<$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>:/W4>
-        $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU,Clang>>:-O0 -g>
-        $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang>>:-O3>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_FRONTEND_VARIANT:GNU>>:-Wall -Wextra -Wpedantic>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:/W4>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU,Clang>>:-O0 -g>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang>>:-O3>
 )
 
 # Handle resources (shaders and assets)

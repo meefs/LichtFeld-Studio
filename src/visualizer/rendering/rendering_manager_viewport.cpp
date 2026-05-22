@@ -9,6 +9,7 @@
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
 #include <shared_mutex>
 #include <utility>
@@ -218,8 +219,9 @@ namespace lfs::vis {
     int RenderingManager::pickCameraFrustum(const glm::vec2& mouse_pos) {
         const int previous_hovered_camera = camera_interaction_service_.hoveredCameraId();
         bool hover_changed = false;
+        auto* const engine = getRenderingEngine();
         const int hovered_camera = camera_interaction_service_.pickCameraFrustum(
-            engine_.get(),
+            engine,
             viewport_interaction_context_.scene_manager,
             viewport_interaction_context_,
             settings_,
@@ -240,10 +242,9 @@ namespace lfs::vis {
                                                                             const float focal_length_mm,
                                                                             const int width,
                                                                             const int height) {
-        if (!initialized_ || !engine_ || width <= 0 || height <= 0) {
+        if (width <= 0 || height <= 0) {
             return {};
         }
-
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         const auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
         const auto* const model = render_state.combined_model;
@@ -251,48 +252,46 @@ namespace lfs::vis {
             return {};
         }
 
-        const auto& bg = settings_.background_color;
-        const lfs::rendering::FrameView frame_view{
-            .rotation = rotation,
-            .translation = position,
-            .size = {width, height},
-            .focal_length_mm = focal_length_mm,
-            .intrinsics_override = std::nullopt,
-            .background_color = bg};
-
-        if (settings_.point_cloud_mode) {
-            LOG_TRACE("Preview image point-cloud mode is served by the legacy renderer; using Gaussian raster preview");
-        }
-
-        const lfs::rendering::ViewportRenderRequest request{
-            .frame_view = frame_view,
-            .scaling_modifier = settings_.scaling_modifier,
-            .antialiasing = false,
-            .sh_degree = 0,
-            .raster_backend = settings_.raster_backend,
-            .gut = settings_.gut ||
-                   lfs::rendering::isGutBackend(settings_.raster_backend),
-            .equirectangular = settings_.equirectangular,
-            .scene =
-                {.model_transforms = &render_state.model_transforms,
-                 .transform_indices = render_state.transform_indices,
-                 .node_visibility_mask = render_state.node_visibility_mask},
-            .filters = {},
-            .overlay = {}};
-
-        auto result = engine_->renderGaussiansImage(*model, request);
-        render_lock.reset();
-        return result ? result->image : nullptr;
+        (void)rotation;
+        (void)position;
+        (void)focal_length_mm;
+        LOG_TRACE("Gaussian preview image skipped: no Vulkan offscreen preview path is available");
+        return {};
     }
 
     float RenderingManager::getDepthAtPixel(const int x, const int y,
                                             const std::optional<SplitViewPanelId> panel) const {
-        return viewport_artifact_service_.sampleLinearDepthAt(
+        const float cached_depth = viewport_artifact_service_.sampleLinearDepthAt(
             x,
             y,
             frame_lifecycle_service_.lastViewportSize(),
             engine_.get(),
             panel);
+        if (cached_depth > 0.0f) {
+            return cached_depth;
+        }
+
+        if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
+            return -1.0f;
+        }
+
+        VksplatViewportRenderer::OutputSlot output_slot = VksplatViewportRenderer::OutputSlot::Main;
+        if (panel && isIndependentSplitViewActive()) {
+            output_slot = *panel == SplitViewPanelId::Right
+                              ? VksplatViewportRenderer::OutputSlot::SplitRight
+                              : VksplatViewportRenderer::OutputSlot::SplitLeft;
+        }
+
+        const auto depth = vksplat_viewport_renderer_->sampleDepthAtPixel(
+            *last_vulkan_context_,
+            x,
+            y,
+            output_slot);
+        if (!depth) {
+            LOG_TRACE("VkSplat depth sample failed: {}", depth.error());
+            return -1.0f;
+        }
+        return *depth;
     }
 
     float RenderingManager::renderDepthAtPixelForNodeMask(const SceneManager* const scene_manager,
@@ -301,8 +300,7 @@ namespace lfs::vis {
                                                           const int x,
                                                           const int y,
                                                           const std::vector<bool>& node_visibility_mask) {
-        if (!initialized_ || !engine_ || !scene_manager ||
-            render_size.x <= 0 || render_size.y <= 0 ||
+        if (!scene_manager || render_size.x <= 0 || render_size.y <= 0 ||
             x < 0 || x >= render_size.x || y < 0 || y >= render_size.y ||
             node_visibility_mask.empty() ||
             !std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(), [](const bool enabled) {
@@ -310,7 +308,6 @@ namespace lfs::vis {
             })) {
             return -1.0f;
         }
-
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         auto scene_state = scene_manager->buildRenderState();
         const auto* const model = scene_state.combined_model;
@@ -333,27 +330,24 @@ namespace lfs::vis {
 
         lfs::rendering::FrameMetadata metadata{};
         if (settings_.point_cloud_mode) {
+            auto* const engine = getRenderingEngine();
+            if (!engine) {
+                return -1.0f;
+            }
             auto request = buildPointCloudRenderRequest(
                 frame_ctx,
                 render_size,
                 frame_ctx.scene_state.model_transforms);
             request.scene.node_visibility_mask = node_visibility_mask;
-            auto result = engine_->renderPointCloudImage(*model, request);
+            auto result = engine->renderPointCloudImage(*model, request);
             if (!result) {
                 LOG_DEBUG("Masked point-cloud depth render failed: {}", result.error());
                 return -1.0f;
             }
             metadata = std::move(result->metadata);
         } else {
-            auto request = buildViewportRenderRequest(frame_ctx, render_size, &viewport, std::nullopt);
-            request.scene.node_visibility_mask = node_visibility_mask;
-            request.overlay = {};
-            auto result = engine_->renderGaussiansImage(*model, request);
-            if (!result) {
-                LOG_DEBUG("Masked Gaussian depth render failed: {}", result.error());
-                return -1.0f;
-            }
-            metadata = std::move(result->metadata);
+            LOG_TRACE("Masked Gaussian depth render skipped: no Vulkan masked-depth path is available");
+            return -1.0f;
         }
         render_lock.reset();
 
