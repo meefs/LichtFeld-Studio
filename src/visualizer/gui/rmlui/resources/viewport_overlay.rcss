@@ -138,7 +138,8 @@ body {
     pointer-events: none;
 }
 
-.viewport-transform-overlay {
+.viewport-transform-overlay,
+.viewport-selection-overlay {
     position: absolute;
     top: 5dp;
     left: 52dp;
@@ -147,6 +148,64 @@ body {
     justify-content: center;
     pointer-events: none;
     z-index: 9;
+}
+
+.viewport-selection-header {
+    flex-wrap: wrap;
+}
+
+.viewport-transform-meta.viewport-selection-meta {
+    min-width: 88dp;
+    max-width: 128dp;
+    flex-grow: 0;
+}
+
+.viewport-selection-depth-fields {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6dp;
+    flex-grow: 1;
+}
+
+.viewport-selection-depth-axis {
+    display: flex;
+    align-items: center;
+    gap: 3dp;
+    min-width: 0;
+    flex-shrink: 0;
+}
+
+.viewport-selection-depth-axis > .viewport-transform-axis-label {
+    width: 24dp;
+    min-width: 24dp;
+}
+
+.viewport-selection-slider {
+    width: 112dp;
+    min-width: 112dp;
+    height: 22dp;
+    min-height: 22dp;
+    margin-top: 0;
+    position: relative;
+    top: 0;
+}
+
+.viewport-selection-depth-axis > .number-input.viewport-selection-depth-input {
+    width: 72dp;
+    min-width: 72dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 2dp 5dp;
+    line-height: 18dp;
+    font-size: 12dp;
+    box-sizing: border-box;
+}
+
+.viewport-selection-actions {
+    margin-left: auto;
 }
 
 .viewport-transform-panel {
@@ -160,6 +219,10 @@ body {
     flex-direction: column;
     align-items: stretch;
     gap: 6dp;
+}
+
+.viewport-transform-panel.viewport-selection-panel {
+    min-width: 600dp;
 }
 
 .viewport-transform-header {

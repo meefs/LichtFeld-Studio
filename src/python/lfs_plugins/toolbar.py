@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .histogram_support import histogram_mode_available
+from .selection_controls import SelectionControlsController
 from .tools import ToolRegistry
 from .transform_controls import TransformControlsController
 
@@ -659,12 +660,13 @@ class _ViewportToolbarController:
     def __init__(self):
         self._gizmo = _GizmoToolbarController()
         self._utility = _UtilityToolbarController()
+        self._selection_controls = SelectionControlsController()
         self._transform_controls = TransformControlsController()
         self.reset()
 
     def reset(self):
         self._handle = None
-        self._transform_doc = None
+        self._overlay_doc = None
         self._record_cache = {name: None for name in self._RECORD_FIELDS}
         self._show_render_controls = False
         self._show_gizmo_toolbar = False
@@ -673,6 +675,7 @@ class _ViewportToolbarController:
         self._show_submode_toolbar = False
         self._show_pivot_toolbar = False
         self._gizmo.reset()
+        self._selection_controls.unmount()
         self._transform_controls.unmount()
 
     def bind_model(self, model):
@@ -681,6 +684,7 @@ class _ViewportToolbarController:
         for field in self._RECORD_FIELDS:
             model.bind_record_list(field)
         model.bind_event("toolbar_action", self._on_toolbar_action)
+        self._selection_controls.bind_model(model)
         self._transform_controls.bind_model(model)
 
     def attach_handle(self, handle):
@@ -695,13 +699,15 @@ class _ViewportToolbarController:
         if self._handle is None:
             return
 
-        can_update_transform_overlay = hasattr(doc, "get_element_by_id")
-        if can_update_transform_overlay and self._transform_doc is not doc:
-            self._transform_doc = doc
+        can_update_tool_overlays = hasattr(doc, "get_element_by_id")
+        if can_update_tool_overlays and self._overlay_doc is not doc:
+            self._overlay_doc = doc
+            self._selection_controls.mount(doc)
             self._transform_controls.mount(doc)
 
         self._sync_toolbar_state()
-        if can_update_transform_overlay:
+        if can_update_tool_overlays:
+            self._selection_controls.update(doc)
             self._transform_controls.update(doc)
 
     def _sync_toolbar_state(self):

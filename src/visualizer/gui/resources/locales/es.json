@@ -83,7 +83,20 @@
     "transform_pivot": "Elegir el pivote usado para las transformaciones",
     "transform_position": "Valores de posición para el objetivo seleccionado",
     "transform_rotation": "Valores de rotación para el objetivo seleccionado",
-    "transform_scale": "Valores de escala para el objetivo seleccionado"
+    "transform_scale": "Valores de escala para el objetivo seleccionado",
+    "selection_panel": "Herramientas de selección",
+    "selection_tool": "Herramienta de selección activa",
+    "selection_mode": "Modo de selección activo",
+    "selection_depth_range": "Rango de profundidad de selección",
+    "selection_depth_near": "Borde cercano de la caja de profundidad",
+    "selection_depth_far": "Borde lejano de la caja de profundidad",
+    "selection_depth_mode": "Alternar modo de profundidad de selección",
+    "selection_delete": "Eliminar gaussianas seleccionadas",
+    "selection_undo": "Deshacer el último cambio de selección",
+    "selection_redo": "Rehacer el último cambio de selección",
+    "selection_invert": "Invertir la selección de gaussianas",
+    "selection_select_all": "Seleccionar todas las gaussianas",
+    "selection_unselect": "Borrar la selección de gaussianas"
   },
   "about": {
     "title": "LICHTFELD STUDIO",

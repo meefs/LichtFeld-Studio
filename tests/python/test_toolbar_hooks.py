@@ -114,6 +114,7 @@ def toolbar_module(monkeypatch):
 
     sys.modules.pop("lfs_plugins", None)
     sys.modules.pop("lfs_plugins.toolbar", None)
+    sys.modules.pop("lfs_plugins.selection_controls", None)
     sys.modules.pop("lfs_plugins.transform_controls", None)
     hook_calls, remove_calls = _install_stub_modules(monkeypatch)
     module = import_module("lfs_plugins.toolbar")
@@ -141,6 +142,19 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "camera_mode_buttons" in model.bound_record_lists
     assert "render_mode_buttons" in model.bound_record_lists
     assert "toolbar_action" in model.bound_events
+    assert "selection_tool_label" in model.bound_funcs
+    assert "selection_mode_label" in model.bound_funcs
+    assert "selection_depth_mode_active" in model.bound_funcs
+    assert "selection_can_delete" in model.bound_funcs
+    assert "selection_can_undo" in model.bound_funcs
+    assert "selection_can_redo" in model.bound_funcs
+    assert "selection_depth_near_str" in model.bound_binds
+    assert "selection_depth_far_str" in model.bound_binds
+    assert "selection_depth_near_slider_min" in model.bound_funcs
+    assert "selection_depth_near_slider_max" in model.bound_funcs
+    assert "selection_depth_far_slider_min" in model.bound_funcs
+    assert "selection_depth_far_slider_max" in model.bound_funcs
+    assert "selection_action" in model.bound_events
     assert "transform_tool_label" in model.bound_funcs
     assert "transform_bake_label" in model.bound_funcs
     assert "transform_show_actions" in model.bound_funcs
@@ -461,6 +475,21 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         "origin_pivot",
         "bounds_center_pivot",
     )
+    selection_tooltip_keys = (
+        "selection_panel",
+        "selection_tool",
+        "selection_mode",
+        "selection_depth_range",
+        "selection_depth_near",
+        "selection_depth_far",
+        "selection_depth_mode",
+        "selection_delete",
+        "selection_undo",
+        "selection_redo",
+        "selection_invert",
+        "selection_select_all",
+        "selection_unselect",
+    )
 
     assert "primary-gizmo-toolbar" not in rml
     assert "secondary-gizmo-toolbar" not in rml
@@ -479,6 +508,23 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : selection_mode_buttons"') == 2
     assert rml.count('data-for="button : transform_group_buttons"') == 2
     assert rml.count('data-for="button : transform_tool_buttons"') == 2
+    assert 'id="selection-block"' in rml
+    assert 'class="viewport-selection-overlay hidden"' in rml
+    assert 'data-event-click="selection_action(\'toggle_depth\')"' in rml
+    assert 'data-event-click="selection_action(\'delete\')"' in rml
+    assert 'data-event-click="selection_action(\'undo\')"' in rml
+    assert 'data-event-click="selection_action(\'redo\')"' in rml
+    assert 'data-event-click="selection_action(\'invert\')"' in rml
+    assert 'data-event-click="selection_action(\'select_all\')"' in rml
+    assert 'data-event-click="selection_action(\'unselect\')"' in rml
+    assert 'data-value="selection_depth_near_value"' in rml
+    assert 'data-value="selection_depth_far_value"' in rml
+    assert 'data-attr-min="selection_depth_near_slider_min"' in rml
+    assert 'data-attr-max="selection_depth_far_slider_max"' in rml
+    assert "../icon/depth-map.png" in rml
+    assert "../icon/contrast.png" in rml
+    assert "../icon/scene/trash.png" in rml
+    assert "../icon/scene/x.png" in rml
     assert 'id="transform-block"' in rml
     assert 'class="viewport-transform-overlay hidden"' in rml
     assert 'class="viewport-transform-header"' in rml
@@ -491,10 +537,14 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert 'data-event-click="transform_action(\'reset\')"' in rml
     assert "../icon/check.png" in rml
     assert "../icon/reset.png" in rml
+    for key in selection_tooltip_keys:
+        assert f'data-tooltip="tooltip.{key}"' in rml
     for key in transform_tooltip_keys:
         assert f'data-tooltip="tooltip.{key}"' in rml
     for locale_path in sorted(locale_dir.glob("*.json")):
         data = json.loads(locale_path.read_text(encoding="utf-8"))
+        for key in selection_tooltip_keys:
+            assert data.get("tooltip", {}).get(key), f"{locale_path.name} missing tooltip.{key}"
         for key in (*transform_tooltip_keys, *transform_dynamic_tooltip_keys):
             assert data.get("tooltip", {}).get(key), f"{locale_path.name} missing tooltip.{key}"
         for key in transform_toolbar_tooltip_keys:
@@ -541,6 +591,10 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "border-left-color: rgba(0, 0, 0, 0);" in rcss
     assert "border-bottom-width: 9dp;" in rcss
     assert ".viewport-transform-overlay" in rcss
+    assert ".viewport-selection-overlay" in rcss
+    assert ".viewport-selection-panel" in rcss
+    assert ".viewport-selection-depth-fields" in rcss
+    assert ".viewport-selection-slider" in rcss
     assert ".viewport-transform-panel" in rcss
 
 
