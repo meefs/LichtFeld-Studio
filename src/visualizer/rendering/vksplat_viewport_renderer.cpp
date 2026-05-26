@@ -1014,16 +1014,8 @@ namespace lfs::vis {
         buffers_.scales_opacs.deviceBuffer = {};
         buffers_.sh_coeffs.deviceBuffer = {};
 
-        // Resize host-shadow vectors so the rasterizer's bookkeeping (which
-        // calls byteLength()) keeps matching the device-side payload. The host
-        // vectors are not read by the rasterizer; only their size() matters
-        // when the renderer cross-checks element counts.
-        buffers_.xyz_ws.resize(slot.region_bytes[InputXyzWs] / sizeof(float));
-        buffers_.sh0.resize(slot.region_bytes[InputSh0] / sizeof(float));
-        buffers_.shN.resize(slot.region_bytes[InputShN] / sizeof(float));
-        buffers_.rotations.resize(slot.region_bytes[InputRotations] / sizeof(float));
-        buffers_.scaling_raw.resize(slot.region_bytes[InputScalingRaw] / sizeof(float));
-        buffers_.opacity_raw.resize(slot.region_bytes[InputOpacityRaw] / sizeof(float));
+        // Only the deviceBuffer side of Buffer<float> is consumed downstream;
+        // resizing the std::vector base would zero-init multi-GB of host memory.
         buffers_.scales_opacs.clear();
         buffers_.sh_coeffs.clear();
 
@@ -1551,13 +1543,7 @@ namespace lfs::vis {
             means_storage && sh0_storage && shN_storage && rotations_storage &&
             scaling_storage && opacity_storage && !splat_data.has_deleted_mask();
 
-        const auto resize_host_shadows = [&](const bool reset_cached_raster_state) {
-            buffers_.xyz_ws.resize(layout->xyz_bytes / sizeof(float));
-            buffers_.sh0.resize(layout->sh0_bytes / sizeof(float));
-            buffers_.shN.resize(layout->shN_bytes / sizeof(float));
-            buffers_.rotations.resize(layout->rotations_bytes / sizeof(float));
-            buffers_.scaling_raw.resize(layout->scaling_bytes / sizeof(float));
-            buffers_.opacity_raw.resize(layout->opacity_bytes / sizeof(float));
+        const auto reset_buffer_bookkeeping = [&](const bool reset_cached_raster_state) {
             buffers_.scales_opacs.clear();
             buffers_.sh_coeffs.clear();
             buffers_.num_splats = n;
@@ -1624,7 +1610,7 @@ namespace lfs::vis {
                     opacity_storage->vkBuffer(), opacity_storage->bytes(), layout->opacity_bytes, opacity_storage->vkOffset());
                 buffers_.scales_opacs.deviceBuffer = {};
                 buffers_.sh_coeffs.deviceBuffer = {};
-                resize_host_shadows(input_snapshot_changed);
+                reset_buffer_bookkeeping(input_snapshot_changed);
             }
 
             const cudaStream_t stream = splat_data.means_raw().stream();
