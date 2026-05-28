@@ -185,6 +185,9 @@ int main(int argc, char* argv[]) {
     // upload until first use, dropping the eager-load slice of cuda.primary_context.
     applyCudaContextTuning();
 
+    // Probe and decompose the CUDA driver's context-creation cost before any other
+    // code touches the device. Surfaces per-phase byte values into the HUD breakdown.
+    analyzeCudaContextDistribution();
     configure_usd_plugins();
 
     auto result = lfs::core::args::parse_args(argc, argv);

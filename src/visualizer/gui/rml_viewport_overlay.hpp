@@ -5,12 +5,17 @@
 #pragma once
 
 #include "gui/rmlui/rml_tooltip.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/vram_hud_overlay.hpp"
+#include "visualizer/app_store.hpp"
 
+#include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace Rml {
@@ -24,7 +29,6 @@ namespace lfs::vis {
 }
 namespace lfs::vis::gui {
 
-    class RmlUIManager;
     struct PanelInputState;
 
     class RmlViewportOverlay {
@@ -61,7 +65,7 @@ namespace lfs::vis::gui {
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
-            return render_needed_ || animation_active_ || tooltip_.needsFrame() ||
+            return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.needsFrame() ||
                    (vram_hud_ && vram_hud_->needsAnimationFrame());
         }
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
@@ -70,11 +74,34 @@ namespace lfs::vis::gui {
         bool updateTheme();
         void cacheBodyTemplate();
         void ensureBodyDataModelBound(Rml::Element* body);
-        bool shouldRunDocumentHooks(bool force) const;
+        bool shouldRunDocumentHooks(bool force, bool prepend) const;
+        bool shouldRunAnyDocumentHooks(bool force) const;
+        void markDocumentSyncDirty();
+        bool syncBuiltinDocument(bool force);
         bool updateToolbarRoots();
+        void bindReactiveStore();
+        void refreshGTMetricsOverlayFromStore();
         void applyGTMetricsOverlay();
         bool applyFrameTooltip();
-        void queueVulkanContext();
+        void queueCachedVulkanContext(bool refresh_cache);
+        enum class RenderReason : std::uint32_t {
+            Initial = 1u << 0,
+            Reload = 1u << 1,
+            DocumentSync = 1u << 2,
+            DocumentHook = 1u << 3,
+            ViewportResize = 1u << 4,
+            ToolbarLayout = 1u << 5,
+            GTMetrics = 1u << 6,
+            VramHud = 1u << 7,
+            DataModelBinding = 1u << 8,
+            PointerHover = 1u << 9,
+            PointerButton = 1u << 10,
+            PointerWheel = 1u << 11,
+            PointerDrag = 1u << 12,
+            Keyboard = 1u << 13,
+        };
+        void markRenderNeeded(RenderReason reason);
+        [[nodiscard]] std::string renderReasonSources() const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -102,6 +129,8 @@ namespace lfs::vis::gui {
         bool wants_input_ = false;
         bool doc_registered_ = false;
         bool render_needed_ = true;
+        std::uint32_t render_reason_bits_ = static_cast<std::uint32_t>(RenderReason::Initial);
+        bool document_sync_dirty_ = true;
         bool data_model_binding_dirty_ = true;
         bool animation_active_ = false;
         bool hovered_interactive_ = false;
@@ -111,7 +140,14 @@ namespace lfs::vis::gui {
         int last_mouse_y_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
+        CachedVulkanContextRender direct_cache_;
         GTMetricsOverlayState gt_metrics_overlay_;
+        lfs::vis::AppStore::GTMetricsOverlayConfig gt_metrics_config_;
+        std::optional<lfs::vis::AppStore::CameraMetrics> camera_metrics_;
+        lfs::core::reactive::SubscriptionToken gt_metrics_config_subscription_;
+        lfs::core::reactive::SubscriptionToken camera_metrics_subscription_;
+        lfs::core::reactive::SubscriptionToken vram_hud_subscription_;
+        std::vector<lfs::core::reactive::SubscriptionToken> document_sync_subscriptions_;
         std::unique_ptr<VramHudOverlay> vram_hud_;
         RmlTooltipController tooltip_;
         std::chrono::steady_clock::time_point last_document_hook_run_{};

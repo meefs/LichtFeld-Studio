@@ -28,6 +28,7 @@
 #include "py_prop_registry.hpp"
 #include "py_rml.hpp"
 #include "py_signals.hpp"
+#include "py_store.hpp"
 #include "py_tensor.hpp"
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
@@ -36,6 +37,7 @@
 #include "python/ui_hooks.hpp"
 #include "rendering/render_constants.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
@@ -3232,9 +3234,49 @@ namespace lfs::python {
     }
 
     void register_ui_context_menu(nb::module_& m) {
+        const auto make_python_context_menu_callback =
+            [](nb::object callback) -> lfs::vis::gui::GlobalContextMenu::ActionCallback {
+                if (callback.is_none())
+                    return {};
+                if (!PyCallable_Check(callback.ptr()))
+                    throw nb::type_error("show_context_menu on_action must be callable or None");
+
+                PyObject* const callable = callback.ptr();
+                Py_INCREF(callable);
+                const auto callable_ref = std::shared_ptr<PyObject>(callable, [](PyObject* obj) {
+                    if (!obj || !lfs::python::can_acquire_gil())
+                        return;
+                    const lfs::python::GilAcquire gil;
+                    Py_DECREF(obj);
+                });
+
+                return [callable_ref](const std::string_view action) {
+                    if (!lfs::python::can_acquire_gil()) {
+                        LOG_ERROR("Unable to run Python context menu callback: Python GIL is unavailable");
+                        return;
+                    }
+
+                    const lfs::python::GilAcquire gil;
+                    PyObject* const py_action = PyUnicode_FromStringAndSize(action.data(), action.size());
+                    if (!py_action) {
+                        LOG_ERROR("Python context menu callback argument creation failed: {}",
+                                  lfs::python::extract_python_error());
+                        return;
+                    }
+
+                    PyObject* const result = PyObject_CallFunctionObjArgs(callable_ref.get(), py_action, nullptr);
+                    Py_DECREF(py_action);
+                    if (result) {
+                        Py_DECREF(result);
+                    } else {
+                        LOG_ERROR("Python context menu callback failed: {}", lfs::python::extract_python_error());
+                    }
+                };
+            };
+
         m.def(
             "show_context_menu",
-            [](nb::list items, float sx, float sy) {
+            [make_python_context_menu_callback](nb::list items, float sx, float sy, nb::object on_action) {
                 auto* cm = get_global_context_menu();
                 if (!cm)
                     return;
@@ -3258,9 +3300,9 @@ namespace lfs::python {
                     vec.push_back(std::move(ci));
                 }
 
-                cm->request(std::move(vec), sx, sy);
+                cm->request(std::move(vec), sx, sy, make_python_context_menu_callback(std::move(on_action)));
             },
-            nb::arg("items"), nb::arg("screen_x"), nb::arg("screen_y"));
+            nb::arg("items"), nb::arg("screen_x"), nb::arg("screen_y"), nb::arg("on_action") = nb::none());
 
         m.def("poll_context_menu", []() -> std::string {
             auto* cm = get_global_context_menu();
@@ -3643,7 +3685,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -5032,7 +5075,9 @@ namespace lfs::python {
         m.def(
             "set_language",
             [](const std::string& lang_code) {
-                lfs::event::LocalizationManager::getInstance().setLanguage(lang_code);
+                if (lfs::event::LocalizationManager::getInstance().setLanguage(lang_code)) {
+                    lfs::vis::publish_language_generation();
+                }
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
 
@@ -5140,6 +5185,7 @@ namespace lfs::python {
             PyGizmoRegistry::instance().unregister_all();
             PyUIListRegistry::instance().unregister_all();
             vis::op::operators().unregisterAllPython();
+            shutdown_store_bridge();
             shutdown_signal_bridge();
             g_cancel_operator_py_callback = nb::callable();
             g_modal_event_py_callback = nb::callable();
@@ -5452,16 +5498,17 @@ namespace lfs::python {
         set_python_document_hook_invoker([](const char* panel, const char* section,
                                             void* document, bool prepend) -> bool {
             auto& registry = PyUIHookRegistry::instance();
-            if (registry.has_hooks(panel, section)) {
+            const auto position = prepend ? PyHookPosition::Prepend : PyHookPosition::Append;
+            if (registry.has_hooks(panel, section, position)) {
                 return registry.invoke_document(
-                    panel, section, static_cast<Rml::ElementDocument*>(document),
-                    prepend ? PyHookPosition::Prepend : PyHookPosition::Append);
+                    panel, section, static_cast<Rml::ElementDocument*>(document), position);
             }
             return false;
         });
 
-        set_python_hook_checker([](const char* panel, const char* section) -> bool {
-            return PyUIHookRegistry::instance().has_hooks(panel, section);
+        set_python_hook_checker([](const char* panel, const char* section, const bool prepend) -> bool {
+            return PyUIHookRegistry::instance().has_hooks(
+                panel, section, prepend ? PyHookPosition::Prepend : PyHookPosition::Append);
         });
 
         set_popup_draw_callback([]() {
@@ -5471,6 +5518,12 @@ namespace lfs::python {
                                 LEGACY_POPUP_SECTION_STR,
                                 PyHookPosition::Append);
             }
+        });
+        set_popup_has_callback([]() {
+            return PyUIHookRegistry::instance().has_hooks(
+                LEGACY_POPUP_PANEL_STR,
+                LEGACY_POPUP_SECTION_STR,
+                PyHookPosition::Append);
         });
     }
 

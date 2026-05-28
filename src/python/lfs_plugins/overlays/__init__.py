@@ -6,8 +6,13 @@ import lichtfeld as lf
 
 from .. import toolbar as viewport_toolbar
 
+try:
+    from ..ui.store import native_value as _native_store_value
+except Exception:
+    def _native_store_value(_field, fallback):
+        return fallback
+
 _HOOK_PANEL = "viewport_overlay"
-_DOCUMENT_SECTION = "document"
 _DRAW_SECTION = "draw"
 _HOOK_POSITION = "append"
 
@@ -60,6 +65,27 @@ def _viewport_bottom_inset(layout, base_inset):
         seq_height = 162.0 * dp + film_strip_h
         bottom_inset = max(base_inset, seq_height + 8.0)
     return bottom_inset
+
+
+def _get_import_state():
+    native_state = _native_store_value("import_overlay_state", None)
+    if isinstance(native_state, dict):
+        return dict(native_state)
+
+    if not hasattr(lf.ui, "get_import_state"):
+        return {}
+
+    return dict(lf.ui.get_import_state())
+
+
+def _get_video_state():
+    native_state = _native_store_value("video_export_overlay_state", None)
+    if isinstance(native_state, dict):
+        return dict(native_state)
+
+    if not hasattr(lf.ui, "get_video_export_state"):
+        return {}
+    return dict(lf.ui.get_video_export_state())
 
 
 class _OverlayDocumentController:
@@ -205,15 +231,10 @@ class _OverlayDocumentController:
         return True
 
     def _get_import_state(self):
-        if not hasattr(lf.ui, "get_import_state"):
-            return {}
-
-        return dict(lf.ui.get_import_state())
+        return _get_import_state()
 
     def _get_video_state(self):
-        if not hasattr(lf.ui, "get_video_export_state"):
-            return {}
-        return dict(lf.ui.get_video_export_state())
+        return _get_video_state()
 
     def _show_import_overlay(self):
         state = self._import_state
@@ -299,10 +320,9 @@ class _OverlayDocumentController:
 def _draw_empty_state_overlay(layout):
     if not lf.ui.is_scene_empty() or lf.ui.is_drag_hovering() or lf.ui.is_startup_visible():
         return
-    if hasattr(lf.ui, "get_import_state"):
-        state = dict(lf.ui.get_import_state())
-        if state.get("active", False) or state.get("show_completion", False):
-            return
+    import_state = _get_import_state()
+    if import_state.get("active", False) or import_state.get("show_completion", False):
+        return
 
     vp_x, vp_y = layout.get_viewport_pos()
     vp_w, vp_h = layout.get_viewport_size()
@@ -510,7 +530,7 @@ def _draw_drag_drop_overlay(layout):
     layout.end_window()
 
 
-def _sync_viewport_overlay_document(doc):
+def _sync_viewport_overlay_document(doc=None):
     global _document_controller
     if _document_controller is None:
         _document_controller = _OverlayDocumentController()
@@ -519,6 +539,14 @@ def _sync_viewport_overlay_document(doc):
     if callable(debug_log):
         for source in dirty_sources or []:
             debug_log("[PERF] viewport_overlay_document_dirty source=" + str(source))
+    return bool(dirty_sources)
+
+
+def sync_document(doc=None):
+    """Synchronize the first-party viewport overlay data model."""
+    if not _hook_registered:
+        return False
+    return _sync_viewport_overlay_document(doc)
 
 
 def _draw_viewport_overlay(layout):
@@ -532,9 +560,9 @@ def register():
     if _hook_registered:
         return
 
-    lf.ui.add_hook(_HOOK_PANEL, _DOCUMENT_SECTION, _sync_viewport_overlay_document, _HOOK_POSITION)
     lf.ui.add_hook(_HOOK_PANEL, _DRAW_SECTION, _draw_viewport_overlay, _HOOK_POSITION)
     _hook_registered = True
+    _sync_viewport_overlay_document()
 
 
 def unregister():
@@ -543,7 +571,6 @@ def unregister():
     if not _hook_registered:
         return
 
-    lf.ui.remove_hook(_HOOK_PANEL, _DOCUMENT_SECTION, _sync_viewport_overlay_document)
     lf.ui.remove_hook(_HOOK_PANEL, _DRAW_SECTION, _draw_viewport_overlay)
     _hook_registered = False
     if _document_controller is not None:
