@@ -1760,9 +1760,9 @@ namespace lfs::vis {
             return {};
         }
         return [context = last_vulkan_context_](lfs::core::TensorShape shape,
-                                                 const size_t capacity,
-                                                 const lfs::core::DataType dtype,
-                                                 const std::string_view name) -> lfs::core::Tensor {
+                                                const size_t capacity,
+                                                const lfs::core::DataType dtype,
+                                                const std::string_view name) -> lfs::core::Tensor {
             const std::string debug_name{name};
             auto tensor = makeVulkanExternalTensor(
                 *context,
