@@ -18,6 +18,7 @@
 #include <format>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <variant>
 
@@ -89,6 +90,45 @@ namespace lfs::training {
                 LOG_INFO("Training SH schedule active degree: {} -> 0 (max {})",
                          active_before, splat.get_max_sh_degree());
             }
+        }
+
+        std::optional<float> computeSceneScaleFromPositions(
+            const lfs::core::Tensor& positions,
+            const lfs::core::Tensor& scene_center) {
+            if (!positions.is_valid() || positions.ndim() != 2 ||
+                positions.size(0) == 0 || positions.size(1) < 3 ||
+                !scene_center.is_valid() || scene_center.numel() < 3) {
+                return std::nullopt;
+            }
+
+            const auto center = scene_center.to(positions.device());
+            const auto dists = positions.sub(center).norm(2.0f, {1}, false);
+            if (!dists.is_valid() || dists.size(0) == 0) {
+                return std::nullopt;
+            }
+
+            const auto sorted_dists = dists.sort(0, false);
+            return sorted_dists.first[dists.size(0) / 2].item();
+        }
+
+        void recomputeInitSplatSceneScale(
+            lfs::core::SplatData& model,
+            const lfs::core::Tensor& scene_center,
+            const std::filesystem::path& init_file) {
+            const auto scene_scale = computeSceneScaleFromPositions(model.means_raw(), scene_center);
+            if (!scene_scale) {
+                LOG_WARN("Could not compute scene scale for init splat {}; keeping {}",
+                         lfs::core::path_to_utf8(init_file.filename()),
+                         model.get_scene_scale());
+                return;
+            }
+
+            const float previous_scale = model.get_scene_scale();
+            model.set_scene_scale(*scene_scale);
+            LOG_INFO("Computed init scene scale from {}: {} -> {}",
+                     lfs::core::path_to_utf8(init_file.filename()),
+                     previous_scale,
+                     *scene_scale);
         }
 
         std::expected<std::unique_ptr<lfs::core::SplatData>, std::string> loadAddedSplat(
@@ -414,17 +454,18 @@ namespace lfs::training {
                         scene.setTrainingModelNode("Model");
                     } else {
                         auto loader = lfs::io::Loader::create();
-                        auto load_result = loader->load(init_file);
+                        auto init_result = loader->load(init_file);
 
-                        if (!load_result) {
+                        if (!init_result) {
                             return std::unexpected(std::format("Failed to load '{}': {}",
-                                                               lfs::core::path_to_utf8(init_file), load_result.error().format()));
+                                                               lfs::core::path_to_utf8(init_file), init_result.error().format()));
                         }
 
                         try {
-                            auto splat_data = std::move(*std::get<std::shared_ptr<lfs::core::SplatData>>(load_result->data));
+                            auto splat_data = std::move(*std::get<std::shared_ptr<lfs::core::SplatData>>(init_result->data));
                             auto model = std::make_unique<lfs::core::SplatData>(std::move(splat_data));
 
+                            recomputeInitSplatSceneScale(*model, load_result->scene_center, init_file);
                             applyTrainingSHDegree(*model, params.optimization.sh_degree);
 
                             LOG_INFO("Loaded {} Gaussians from {} (sh={})",
@@ -768,6 +809,7 @@ namespace lfs::training {
                             auto splat_data = std::move(*std::get<std::shared_ptr<lfs::core::SplatData>>(init_result->data));
                             auto model = std::make_unique<lfs::core::SplatData>(std::move(splat_data));
 
+                            recomputeInitSplatSceneScale(*model, load_result.scene_center, init_file);
                             applyTrainingSHDegree(*model, params.optimization.sh_degree);
 
                             LOG_INFO("Loaded {} gaussians from {} (sh={})",
