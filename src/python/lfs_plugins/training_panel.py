@@ -1305,6 +1305,15 @@ class TrainingPanel(Panel):
         if not can_edit:
             return False
 
+        return self._refresh_save_steps_model(params)
+
+    def _refresh_save_steps_model(self, params=None):
+        if params is None:
+            params = lf.optimization_params()
+        if not self._handle or not params or not params.has_params():
+            self._last_save_steps = None
+            return False
+
         steps = list(params.save_steps)
         if self._last_save_steps is None or steps != self._last_save_steps:
             self._last_save_steps = steps[:]
@@ -1948,7 +1957,7 @@ class TrainingPanel(Panel):
                 params.add_save_step(self._new_save_step)
                 if params.enable_eval:
                     self._sync_eval_steps_with_save_steps(params)
-                self._last_save_steps = None
+                self._refresh_save_steps_model(params)
 
     def _action_start(self):
         params = lf.optimization_params()
@@ -2081,7 +2090,7 @@ class TrainingPanel(Panel):
             params.remove_save_step(step_to_remove)
             if params.enable_eval:
                 self._remove_from_eval_steps(params, step_to_remove)
-            self._last_save_steps = None
+            self._refresh_save_steps_model(params)
 
     def _sync_eval_steps_with_save_steps(self, params):
         if not params or not params.has_params():
