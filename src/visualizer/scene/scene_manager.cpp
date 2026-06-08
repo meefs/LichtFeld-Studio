@@ -2801,22 +2801,45 @@ namespace lfs::vis {
             }
         }
 
+        const auto crop_box_for_node = [this, &crop_box](const core::NodeId node_id) {
+            lfs::geometry::BoundingBox local_crop_box = crop_box;
+            const glm::mat4 node_world_transform = scene_coords::nodeDataWorldTransform(scene_, node_id);
+            if (crop_box.hasFullTransform()) {
+                local_crop_box.setworld2BBox(crop_box.getworld2BBoxMat4() * node_world_transform);
+            } else {
+                const lfs::geometry::EuclideanTransform node_to_world(node_world_transform);
+                local_crop_box.setworld2BBox(crop_box.getworld2BBox() * node_to_world);
+            }
+            return local_crop_box;
+        };
+
+        const auto disable_crop_box_for_node = [this](const core::NodeId node_id) {
+            const core::NodeId cropbox_id = scene_.getCropBoxForSplat(node_id);
+            if (cropbox_id == core::NULL_NODE)
+                return;
+
+            const auto* cropbox_node = scene_.getNodeById(cropbox_id);
+            if (!cropbox_node)
+                return;
+
+            auto* mutable_cropbox = scene_.getMutableNode(cropbox_node->name);
+            if (mutable_cropbox && mutable_cropbox->cropbox)
+                mutable_cropbox->cropbox->enabled = false;
+        };
+
         // Crop point cloud data (GPU-accelerated)
         for (const auto& node_name : pointcloud_node_names) {
             auto* node = scene_.getMutableNode(node_name);
             if (!node || !node->point_cloud)
                 continue;
 
-            const core::NodeId cropbox_id = scene_.getCropBoxForSplat(node->id);
-            if (cropbox_id == core::NULL_NODE)
-                continue;
+            const lfs::geometry::BoundingBox local_crop_box = crop_box_for_node(node->id);
 
-            const auto* cropbox_node = scene_.getNodeById(cropbox_id);
-            if (!cropbox_node || !cropbox_node->cropbox)
-                continue;
-
-            const auto& cb = *cropbox_node->cropbox;
-            const glm::mat4 m = glm::inverse(cropbox_node->local_transform.get());
+            const glm::mat4 m = local_crop_box.hasFullTransform()
+                                    ? local_crop_box.getworld2BBoxMat4()
+                                    : local_crop_box.getworld2BBox().toMat4();
+            const glm::vec3 bounds_min = local_crop_box.getMinBounds();
+            const glm::vec3 bounds_max = local_crop_box.getMaxBounds();
             const auto& means = node->point_cloud->means;
             const auto& colors = node->point_cloud->colors;
             const size_t num_points = node->point_cloud->size();
@@ -2837,9 +2860,9 @@ namespace lfs::vis {
             const auto y = local_pos.slice(1, 1, 2).squeeze(1);
             const auto z = local_pos.slice(1, 2, 3).squeeze(1);
 
-            auto mask = (x >= cb.min.x) && (x <= cb.max.x) &&
-                        (y >= cb.min.y) && (y <= cb.max.y) &&
-                        (z >= cb.min.z) && (z <= cb.max.z);
+            auto mask = (x >= bounds_min.x) && (x <= bounds_max.x) &&
+                        (y >= bounds_min.y) && (y <= bounds_max.y) &&
+                        (z >= bounds_min.z) && (z <= bounds_max.z);
             if (inverse)
                 mask = mask.logical_not();
 
@@ -2853,10 +2876,7 @@ namespace lfs::vis {
 
                 LOG_INFO("Cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
 
-                if (auto* cb_mutable = scene_.getMutableNode(cropbox_node->name)) {
-                    if (cb_mutable->cropbox)
-                        cb_mutable->cropbox->enabled = false;
-                }
+                disable_crop_box_for_node(node->id);
             }
         }
 
@@ -2882,23 +2902,7 @@ namespace lfs::vis {
             try {
                 const size_t original_visible = node->model->visible_count();
 
-                // Transform crop box to node's local space if node has a transform
-                lfs::geometry::BoundingBox local_crop_box = crop_box;
-                const glm::mat4 node_world_transform = scene_coords::nodeDataWorldTransform(scene_, node->id);
-                static const glm::mat4 IDENTITY_MATRIX(1.0f);
-
-                if (node_world_transform != IDENTITY_MATRIX) {
-                    // Combine: node_local -> world -> cropbox_local
-                    // world2bbox transforms world -> cropbox_local
-                    // node_world transforms node_local -> world
-                    // So we need: world2bbox * node_world to go node_local -> cropbox_local
-                    if (crop_box.hasFullTransform()) {
-                        local_crop_box.setworld2BBox(crop_box.getworld2BBoxMat4() * node_world_transform);
-                    } else {
-                        const lfs::geometry::EuclideanTransform node_to_world(node_world_transform);
-                        local_crop_box.setworld2BBox(crop_box.getworld2BBox() * node_to_world);
-                    }
-                }
+                const lfs::geometry::BoundingBox local_crop_box = crop_box_for_node(node->id);
 
                 const auto applied_mask = lfs::core::soft_crop_by_cropbox(*node->model, local_crop_box, inverse);
                 if (!applied_mask.is_valid()) {
