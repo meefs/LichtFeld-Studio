@@ -10,8 +10,8 @@
 #include <fstream>
 #include <iterator>
 #include <string>
-#include <vector>
 #include <variant>
+#include <vector>
 
 namespace {
 
