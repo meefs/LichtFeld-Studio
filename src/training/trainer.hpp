@@ -398,20 +398,7 @@ namespace lfs::training {
             bool copy_in_flight = false;
             bool dirty = false;
 
-            ~CameraLossHeatmapState() {
-                if (copy_stream) {
-                    cudaStreamSynchronize(copy_stream);
-                }
-                if (done_event) {
-                    cudaEventDestroy(done_event);
-                }
-                if (ready_event) {
-                    cudaEventDestroy(ready_event);
-                }
-                if (copy_stream) {
-                    cudaStreamDestroy(copy_stream);
-                }
-            }
+            ~CameraLossHeatmapState();
         };
 
         std::shared_ptr<CameraLossHeatmapState> getCameraLossHeatmap() const;
@@ -518,9 +505,8 @@ namespace lfs::training {
         std::atomic<bool> callback_busy_{false};
         cudaStream_t callback_stream_ = nullptr;
 
-        // Dedicated stream for all training-thread GPU work (installed as the
-        // thread's current stream in train()). LFS_TRAIN_STREAM_LEGACY=1 keeps
-        // training on the legacy default stream.
+        // Dedicated stream for all training-thread GPU work, installed as the
+        // thread's current stream in train().
         cudaStream_t training_stream_ = nullptr;
 
         // Non-blocking stream for on-demand GUI metric renders

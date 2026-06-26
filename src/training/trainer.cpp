@@ -946,6 +946,22 @@ namespace lfs::training {
         }
     } // namespace
 
+    Trainer::CameraLossHeatmapState::~CameraLossHeatmapState() {
+        if (copy_stream) {
+            cudaStreamSynchronize(copy_stream);
+        }
+        if (done_event) {
+            cudaEventDestroy(done_event);
+        }
+        if (ready_event) {
+            cudaEventDestroy(ready_event);
+        }
+        if (copy_stream) {
+            lfs::core::CudaMemoryPool::instance().release_stream(copy_stream);
+            cudaStreamDestroy(copy_stream);
+        }
+    }
+
     void Trainer::cleanup() {
         LOG_DEBUG("Cleaning up trainer for re-initialization");
 
@@ -1686,10 +1702,9 @@ namespace lfs::training {
         }
 
         cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
-        // Blocking flag (not cudaStreamNonBlocking): legacy-stream work — blocking
-        // cudaMemcpy readbacks, cold-path loader uploads — must stay implicitly
-        // ordered against training kernels. Overlap partners (loader decode,
-        // viewer render) use non-blocking streams with explicit event edges.
+        // Use the default stream flags so synchronous readbacks and cold-path
+        // uploads remain ordered with training work. Overlap partners use
+        // non-blocking streams with explicit event edges.
         cudaStreamCreate(&training_stream_);
         cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking);
         nvtxNameCudaStreamA(training_stream_, "lfs.train");
@@ -1709,10 +1724,9 @@ namespace lfs::training {
         }
 
         cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
-        // Blocking flag (not cudaStreamNonBlocking): legacy-stream work — blocking
-        // cudaMemcpy readbacks, cold-path loader uploads — must stay implicitly
-        // ordered against training kernels. Overlap partners (loader decode,
-        // viewer render) use non-blocking streams with explicit event edges.
+        // Use the default stream flags so synchronous readbacks and cold-path
+        // uploads remain ordered with training work. Overlap partners use
+        // non-blocking streams with explicit event edges.
         cudaStreamCreate(&training_stream_);
         cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking);
         nvtxNameCudaStreamA(training_stream_, "lfs.train");
@@ -4419,15 +4433,11 @@ namespace lfs::training {
         }
 
         try {
-            static const bool legacy_stream = []() {
-                const char* env = std::getenv("LFS_TRAIN_STREAM_LEGACY");
-                return env && env[0] == '1';
-            }();
             std::optional<lfs::core::CUDAStreamGuard> stream_guard;
-            if (training_stream_ && !legacy_stream) {
+            if (training_stream_) {
                 stream_guard.emplace(training_stream_);
-                // initialize() ran on another thread on the legacy stream; order
-                // all of its work before the first training-stream kernel.
+                // initialize() ran on another thread; order all of its CUDA work
+                // before the first training-stream kernel.
                 cudaDeviceSynchronize();
             }
 
