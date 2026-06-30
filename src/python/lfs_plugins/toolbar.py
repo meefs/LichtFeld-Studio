@@ -20,7 +20,7 @@ except Exception:
         return fallback
 
 
-_TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed")
+_TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed", "finished", "stopped")
 _RML_PATH_SAFE_CHARS = "/:._-~"
 _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 
@@ -224,6 +224,7 @@ class _GizmoToolbarController:
 
     def reset(self):
         self._was_hidden = False
+        self._was_empty = False
 
     def _active_selection_submode(self):
         import lichtfeld as lf
@@ -272,6 +273,16 @@ class _GizmoToolbarController:
             }
 
         self._was_hidden = False
+
+        # When the scene is empty (New Project), clear any lingering active
+        # tool so the toolbar doesn't show a tool as selected that can't
+        # actually be used on an empty scene.
+        if lf.ui.get_content_type() == "empty":
+            if not self._was_empty:
+                ToolRegistry.clear_active()
+            self._was_empty = True
+        else:
+            self._was_empty = False
 
         context = get_context()
         active_tool_id = _native_store_value("active_tool", _MISSING)
@@ -581,12 +592,16 @@ class _GizmoToolbarController:
     def _activate_crop_tool(self, gizmo_type="translate"):
         import lichtfeld as lf
 
-        if self._active_crop_shape() == "box":
-            selected = lf.get_selected_node_names() or []
-            if selected:
-                add_cropbox = getattr(lf.ui, "add_cropbox", None)
-                if callable(add_cropbox):
-                    add_cropbox(selected[0])
+        shape = self._active_crop_shape()
+        selected = lf.get_selected_node_names() or []
+        if shape == "box" and selected:
+            add_cropbox = getattr(lf.ui, "add_cropbox", None)
+            if callable(add_cropbox):
+                add_cropbox(selected[0])
+        elif shape == "ellipsoid" and selected:
+            add_ellipsoid = getattr(lf.ui, "add_ellipsoid", None)
+            if callable(add_ellipsoid):
+                add_ellipsoid(selected[0])
 
         lf.ui.set_active_operator(self._CROP_TOOL_ID, gizmo_type)
 

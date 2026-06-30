@@ -1642,7 +1642,7 @@ namespace lfs::vis {
         std::string closest_name;
 
         for (const auto* node : scene_.getNodes()) {
-            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
+            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH && node->type != core::NodeType::POINTCLOUD)
                 continue;
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
@@ -1733,7 +1733,7 @@ namespace lfs::vis {
         }();
 
         for (const auto* node : scene_.getNodes()) {
-            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
+            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH && node->type != core::NodeType::POINTCLOUD)
                 continue;
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
@@ -2816,6 +2816,12 @@ namespace lfs::vis {
         auto splat_data = std::move(model_node->model);
         const size_t num_gaussians = splat_data->size();
 
+        // Preserve the model's world transform so the trained model
+        // appears at the same position/orientation in edit mode as it
+        // did during training (rendering uses getWorldTransform).
+        const glm::mat4 old_model_world =
+            scene_.getWorldTransform(model_node->id);
+
         if (trainer_mgr) {
             trainer_mgr->clearTrainer();
         }
@@ -2825,6 +2831,9 @@ namespace lfs::vis {
         constexpr const char* MODEL_NAME = "Trained Model";
         scene_.addSplat(MODEL_NAME, std::move(splat_data));
         selectNode(MODEL_NAME);
+
+        // Restore the world transform
+        scene_.setNodeTransform(MODEL_NAME, old_model_world);
 
         if (ppisp) {
             setAppearanceModel(std::move(ppisp), std::move(controller_pool));
@@ -3084,6 +3093,13 @@ namespace lfs::vis {
                         } else if (parent && parent->type == core::NodeType::POINTCLOUD) {
                             pointcloud_node_names.push_back(parent->name);
                         }
+                    } else if (selected->type == core::NodeType::ELLIPSOID) {
+                        const auto* parent = scene_.getNodeById(selected->parent_id);
+                        if (parent && parent->type == core::NodeType::SPLAT) {
+                            splat_node_names.push_back(parent->name);
+                        } else if (parent && parent->type == core::NodeType::POINTCLOUD) {
+                            pointcloud_node_names.push_back(parent->name);
+                        }
                     }
                 }
             }
@@ -3192,6 +3208,10 @@ namespace lfs::vis {
         // Only change content type when cropping SPLAT nodes
         changeContentType(ContentType::SplatFiles);
 
+        // Capture scene state for undo/redo before modifying splat data
+        auto snapshot = std::make_unique<op::SceneSnapshot>(*this, "Crop Box");
+        snapshot->captureTopology();
+
         for (const auto& node_name : splat_node_names) {
             auto* node = scene_.getMutableNode(node_name);
             if (!node || !node->model) {
@@ -3231,6 +3251,9 @@ namespace lfs::vis {
             }
         }
 
+        snapshot->captureAfter();
+        op::pushSceneSnapshotIfChanged(std::move(snapshot));
+
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
     }
 
@@ -3254,6 +3277,13 @@ namespace lfs::vis {
                     } else if (selected->type == core::NodeType::POINTCLOUD) {
                         pointcloud_node_names.push_back(selected->name);
                     } else if (selected->type == core::NodeType::ELLIPSOID) {
+                        const auto* parent = scene_.getNodeById(selected->parent_id);
+                        if (parent && parent->type == core::NodeType::SPLAT) {
+                            splat_node_names.push_back(parent->name);
+                        } else if (parent && parent->type == core::NodeType::POINTCLOUD) {
+                            pointcloud_node_names.push_back(parent->name);
+                        }
+                    } else if (selected->type == core::NodeType::CROPBOX) {
                         const auto* parent = scene_.getNodeById(selected->parent_id);
                         if (parent && parent->type == core::NodeType::SPLAT) {
                             splat_node_names.push_back(parent->name);
@@ -3288,12 +3318,16 @@ namespace lfs::vis {
             const size_t num_points = node->point_cloud->size();
             const auto device = means.device();
 
+            // Compose with node's world transform
+            const glm::mat4 node_world_transform = scene_coords::nodeDataWorldTransform(scene_, node->id);
+            const glm::mat4 combined_transform = inv_world * node_world_transform;
+
             // Transform to ellipsoid local space
             const auto transform = lfs::core::Tensor::from_vector(
-                {inv_world[0][0], inv_world[1][0], inv_world[2][0], inv_world[3][0],
-                 inv_world[0][1], inv_world[1][1], inv_world[2][1], inv_world[3][1],
-                 inv_world[0][2], inv_world[1][2], inv_world[2][2], inv_world[3][2],
-                 inv_world[0][3], inv_world[1][3], inv_world[2][3], inv_world[3][3]},
+                {combined_transform[0][0], combined_transform[1][0], combined_transform[2][0], combined_transform[3][0],
+                 combined_transform[0][1], combined_transform[1][1], combined_transform[2][1], combined_transform[3][1],
+                 combined_transform[0][2], combined_transform[1][2], combined_transform[2][2], combined_transform[3][2],
+                 combined_transform[0][3], combined_transform[1][3], combined_transform[2][3], combined_transform[3][3]},
                 {4, 4}, device);
 
             const auto ones = lfs::core::Tensor::ones({num_points, 1}, device);
@@ -3330,6 +3364,10 @@ namespace lfs::vis {
 
         changeContentType(ContentType::SplatFiles);
 
+        // Capture scene state for undo/redo before modifying splat data
+        auto snapshot = std::make_unique<op::SceneSnapshot>(*this, "Crop Ellipsoid");
+        snapshot->captureTopology();
+
         for (const auto& node_name : splat_node_names) {
             auto* node = scene_.getMutableNode(node_name);
             if (!node || !node->model)
@@ -3347,15 +3385,28 @@ namespace lfs::vis {
                     continue;
 
                 const size_t new_visible = node->model->visible_count();
+                LOG_INFO("Ellipsoid cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
                 if (new_visible == original_visible)
                     continue;
 
-                LOG_INFO("Ellipsoid cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
+                state::PLYAdded{
+                    .name = node_name,
+                    .node_gaussians = new_visible,
+                    .total_gaussians = scene_.getTotalGaussianCount(),
+                    .is_visible = true,
+                    .parent_name = "",
+                    .is_group = false,
+                    .node_type = static_cast<int>(core::NodeType::SPLAT)
+                }
+                    .emit();
 
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to ellipsoid crop '{}': {}", node_name, e.what());
             }
         }
+
+        snapshot->captureAfter();
+        op::pushSceneSnapshotIfChanged(std::move(snapshot));
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
     }
