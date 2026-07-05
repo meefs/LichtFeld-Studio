@@ -281,12 +281,13 @@ namespace lfs::io {
         : config_(std::move(config)),
           output_queue_(std::max<size_t>(1, config_.output_queue_size)) {
 
-        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, output_queue={}, io_threads={}, cold_threads={}",
+        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, output_queue={}, io_threads={}, cold_threads={}, 16bit_pixel_depth={}",
                  config_.jpeg_batch_size,
                  config_.prefetch_count,
                  config_.output_queue_size,
                  config_.io_threads,
-                 config_.cold_process_threads);
+                 config_.cold_process_threads,
+                 config_.use_16bits_pixel_depth);
 
         const bool nvcodec_available = is_nvcodec_available();
 
@@ -1232,8 +1233,12 @@ namespace lfs::io {
                                 apply_requested_undistort(tensor, batch[i].params);
 
                                 try {
-                                    auto jpeg_bytes = nvcodec->encode_to_jpeg(
-                                        tensor, config_.cache_jpeg_quality, batch[i].params.cuda_stream);
+                                    std::vector<uint8_t> jpeg_bytes;
+                                    if (config_.use_16bits_pixel_depth) {
+                                        jpeg_bytes = nvcodec->encode_to_jpeg2k(tensor, nullptr);
+                                    } else {
+                                        jpeg_bytes = nvcodec->encode_to_jpeg(tensor, config_.cache_jpeg_quality, nullptr);
+                                    }
                                     save_to_fs_cache(batch[i].cache_key, jpeg_bytes);
                                     put_in_jpeg_cache(
                                         batch[i].cache_key,
@@ -1535,29 +1540,63 @@ namespace lfs::io {
                     }
 
                     if (!used_gpu) {
-                        auto [img_data, width, height, channels] = lfs::core::load_image(
-                            item.path, item.params.resize_factor, item.params.max_width);
 
-                        if (!img_data)
-                            throw std::runtime_error("Failed to decode image");
+                        if (config_.use_16bits_pixel_depth)
+                        {
+                            auto [img_data, width, height, channels] = lfs::core::load_image_u16(
+                                item.path, item.params.resize_factor, item.params.max_width);
 
-                        const size_t H = static_cast<size_t>(height);
-                        const size_t W = static_cast<size_t>(width);
-                        const size_t C = static_cast<size_t>(channels);
+                            if (!img_data)
+                                throw std::runtime_error("Failed to decode image");
 
-                        auto cpu_tensor = lfs::core::Tensor::from_blob(
-                            img_data, lfs::core::TensorShape({H, W, C}),
-                            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                            const size_t H = static_cast<size_t>(height);
+                            const size_t W = static_cast<size_t>(width);
+                            const size_t C = static_cast<size_t>(channels);
 
-                        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                        lfs::core::free_image(img_data);
+                            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                                img_data, lfs::core::TensorShape({H, W, C}),
+                                lfs::core::Device::CPU, lfs::core::DataType::Float16);
+
+                            auto gpu_u16 = cpu_tensor.to(lfs::core::Device::CUDA);
+                            lfs::core::free_image(img_data);
+
+                            decoded = lfs::core::Tensor::zeros(
+                                lfs::core::TensorShape({C, H, W}),
+                                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+
+                            cuda::launch_uint16_hwc_to_float32_chw(
+                                reinterpret_cast<const uint16_t*>(gpu_u16.data_ptr()),
+                                reinterpret_cast<float*>(decoded.data_ptr()),
+                                H, W, C, nullptr);
+
+                            if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                            }
+                            gpu_u16 = lfs::core::Tensor();
+                        } else {
+                            auto [img_data, width, height, channels] = lfs::core::load_image(
+                                item.path, item.params.resize_factor, item.params.max_width);
+
+                            if (!img_data)
+                                throw std::runtime_error("Failed to decode image");
+
+                            const size_t H = static_cast<size_t>(height);
+                            const size_t W = static_cast<size_t>(width);
+                            const size_t C = static_cast<size_t>(channels);
+
+                            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                                img_data, lfs::core::TensorShape({H, W, C}),
+                                lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+
+                            auto gpu_u8 = cpu_tensor.to(lfs::core::Device::CUDA);
+                            lfs::core::free_image(img_data);
 
                         if (item.params.output_uint8) {
                             decoded = lfs::core::Tensor::empty(
                                 lfs::core::TensorShape({C, H, W}),
                                 lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
                             cuda::launch_uint8_hwc_to_uint8_chw(
-                                reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
+                                reinterpret_cast<const uint8_t*>(gpu_u8.data_ptr()),
                                 reinterpret_cast<uint8_t*>(decoded.data_ptr()),
                                 H, W, C, nullptr);
                         } else {
@@ -1565,15 +1604,17 @@ namespace lfs::io {
                                 lfs::core::TensorShape({C, H, W}),
                                 lfs::core::Device::CUDA, lfs::core::DataType::Float32);
                             cuda::launch_uint8_hwc_to_float32_chw(
-                                reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
+                                reinterpret_cast<const uint8_t*>(gpu_u8.data_ptr()),
                                 reinterpret_cast<float*>(decoded.data_ptr()),
                                 H, W, C, nullptr);
                         }
 
-                        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-                            throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                            if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                            }
+                            gpu_u8 = lfs::core::Tensor();
                         }
-                        gpu_uint8 = lfs::core::Tensor();
+
                     }
 
                     if (item.undistort) {
@@ -1598,8 +1639,13 @@ namespace lfs::io {
 
                     if (is_nvcodec_available()) {
                         try {
-                            auto jpeg_bytes = nvcodec->encode_to_jpeg(
-                                decoded, config_.cache_jpeg_quality, nullptr);
+                            std::vector<uint8_t> jpeg_bytes;
+
+                            if (config_.use_16bits_pixel_depth) {
+                                jpeg_bytes = nvcodec->encode_to_jpeg2k(decoded, nullptr);
+                            } else {
+                                jpeg_bytes = nvcodec->encode_to_jpeg(decoded, config_.cache_jpeg_quality, nullptr);
+                            }
                             save_to_fs_cache(item.cache_key, jpeg_bytes);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
