@@ -530,7 +530,13 @@ namespace lfs::core {
             image = image.squeeze(0);
         if (image.ndim() == 3 && image.shape()[0] <= 4 && image.shape()[2] > 4)
             image = image.permute({1, 2, 0});
-        image = image.to(lfs::core::Device::CPU).to(lfs::core::DataType::UInt8).contiguous();
+        // to() clones even when already on the target device/dtype; guard to avoid
+        // duplicating gigapixel exports.
+        if (image.device() != lfs::core::Device::CPU)
+            image = image.to(lfs::core::Device::CPU);
+        if (image.dtype() != lfs::core::DataType::UInt8)
+            image = image.to(lfs::core::DataType::UInt8);
+        image = image.contiguous();
         write_prepared_image(path, image, jpeg_quality);
     }
 
