@@ -1449,15 +1449,34 @@ namespace lfs::core {
         CONVERT_DTYPE_CUDA(int, uint8_t, DataType::Int32, DataType::UInt8)
         CONVERT_DTYPE_CUDA(uint8_t, int, DataType::UInt8, DataType::Int32)
 
-        // Bool <-> UInt8: Same underlying storage, just reinterpret dtype
-        if ((dtype_ == DataType::Bool && dtype == DataType::UInt8) ||
-            (dtype_ == DataType::UInt8 && dtype == DataType::Bool)) {
+        // Bool -> UInt8: Bool storage is already normalized to 0 or 1.
+        if (dtype_ == DataType::Bool && dtype == DataType::UInt8) {
             auto result = empty(shape_, device_, dtype);
             if (numel() > 0) {
                 if (device_ == Device::CUDA) {
                     LFS_CUDA_CHECK(cudaMemcpy(const_cast<void*>(result.data_ptr()), data_ptr(), bytes(), cudaMemcpyDeviceToDevice));
                 } else {
                     std::memcpy(const_cast<void*>(result.data_ptr()), data_ptr(), bytes());
+                }
+            }
+            return result;
+        }
+
+        // UInt8 -> Bool follows Torch's nonzero semantics rather than merely
+        // reinterpreting the byte storage.
+        if (dtype_ == DataType::UInt8 && dtype == DataType::Bool) {
+            auto result = empty(shape_, device_, DataType::Bool);
+            if (numel() == 0)
+                return result;
+
+            if (device_ == Device::CUDA) {
+                tensor_ops::launch_convert_type<uint8_t, bool>(
+                    ptr<uint8_t>(), result.ptr<bool>(), numel(), result.stream());
+            } else {
+                const uint8_t* src = ptr<uint8_t>();
+                uint8_t* dst = result.ptr<uint8_t>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    dst[i] = src[i] != 0 ? 1 : 0;
                 }
             }
             return result;
@@ -2040,8 +2059,6 @@ namespace lfs::core {
                        "bitwise OR requires Bool tensors");
         LFS_ASSERT_MSG(device_ == other.device(),
                        "bitwise OR requires tensors on the same device");
-        LFS_ASSERT_MSG(shape_ == other.shape(),
-                       "bitwise OR requires matching shapes");
 
         return logical_or(other);
     }
@@ -2053,8 +2070,8 @@ namespace lfs::core {
                        "clamp_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
                        "clamp_ currently supports only Float32 and Int32");
-        LFS_ASSERT_MSG(std::isfinite(min_val) && std::isfinite(max_val) && min_val <= max_val,
-                       "clamp_ bounds must be finite and ordered");
+        LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
+                       "clamp_ bounds must not be NaN and must be ordered");
         if (numel() == 0) {
             return *this;
         }
@@ -2756,7 +2773,7 @@ namespace lfs::core {
 
         // Use fast GPU check for CUDA tensors (only transfers 1 int back)
         if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
-            return tensor_ops::has_nan_or_inf_gpu(ptr<float>(), numel(), stream());
+            return tensor_ops::has_nan_gpu(ptr<float>(), numel(), stream());
         }
 
         // CPU fallback
@@ -2773,9 +2790,8 @@ namespace lfs::core {
         }
 
         // Use fast GPU check for CUDA tensors (only transfers 1 int back)
-        // Note: has_nan_or_inf_gpu checks both NaN and Inf
         if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
-            return tensor_ops::has_nan_or_inf_gpu(ptr<float>(), numel(), stream());
+            return tensor_ops::has_inf_gpu(ptr<float>(), numel(), stream());
         }
 
         // CPU fallback

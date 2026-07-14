@@ -292,6 +292,14 @@ namespace lfs::core::tensor_ops {
 
     LFS_CORE_API void launch_masked_scatter(float* data, const unsigned char* mask,
                                             const float* src, size_t n, size_t src_size, cudaStream_t stream);
+    LFS_CORE_API void launch_masked_scatter(__half* data, const unsigned char* mask,
+                                            const __half* src, size_t n, size_t src_size, cudaStream_t stream);
+    LFS_CORE_API void launch_masked_scatter(int32_t* data, const unsigned char* mask,
+                                            const int32_t* src, size_t n, size_t src_size, cudaStream_t stream);
+    LFS_CORE_API void launch_masked_scatter(int64_t* data, const unsigned char* mask,
+                                            const int64_t* src, size_t n, size_t src_size, cudaStream_t stream);
+    LFS_CORE_API void launch_masked_scatter(uint8_t* data, const unsigned char* mask,
+                                            const uint8_t* src, size_t n, size_t src_size, cudaStream_t stream);
 
     LFS_CORE_API void launch_where(const unsigned char* condition,
                                    const float* x, const float* y, float* result,
@@ -481,7 +489,8 @@ namespace lfs::core::tensor_ops {
         size_t n,
         cudaStream_t stream = nullptr);
 
-    LFS_CORE_API bool has_nan_or_inf_gpu(const float* data, size_t n, cudaStream_t stream = nullptr);
+    LFS_CORE_API bool has_nan_gpu(const float* data, size_t n, cudaStream_t stream = nullptr);
+    LFS_CORE_API bool has_inf_gpu(const float* data, size_t n, cudaStream_t stream = nullptr);
 
     // ============= Fused Affine Transform =============
     LFS_CORE_API void launch_fused_affine_transform(const float* input, float* output,

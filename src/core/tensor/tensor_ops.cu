@@ -117,6 +117,11 @@ namespace lfs::core::tensor_ops {
 
     // ============= CLAMP OPERATIONS (USING FUNCTORS) =============
 
+    __device__ __forceinline__ float clamp_preserving_nan(
+        const float value, const float min_val, const float max_val) {
+        return isnan(value) ? value : fminf(fmaxf(value, min_val), max_val);
+    }
+
     // Vectorized clamp kernel with float4 loads (2-4x faster!)
     __global__ void clamp_kernel_vectorized(float* __restrict__ data, float min_val, float max_val, size_t n) {
         const size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -127,10 +132,10 @@ namespace lfs::core::tensor_ops {
             float4 vals = reinterpret_cast<float4*>(data)[vec_idx];
 
             // Clamp all 4 values
-            vals.x = fminf(fmaxf(vals.x, min_val), max_val);
-            vals.y = fminf(fmaxf(vals.y, min_val), max_val);
-            vals.z = fminf(fmaxf(vals.z, min_val), max_val);
-            vals.w = fminf(fmaxf(vals.w, min_val), max_val);
+            vals.x = clamp_preserving_nan(vals.x, min_val, max_val);
+            vals.y = clamp_preserving_nan(vals.y, min_val, max_val);
+            vals.z = clamp_preserving_nan(vals.z, min_val, max_val);
+            vals.w = clamp_preserving_nan(vals.w, min_val, max_val);
 
             // Store 4 floats in one transaction
             reinterpret_cast<float4*>(data)[vec_idx] = vals;
@@ -138,10 +143,7 @@ namespace lfs::core::tensor_ops {
         // Scalar fallback for remainder
         else if (idx < n) {
             for (size_t i = idx; i < n; ++i) {
-                float val = data[i];
-                val = fmaxf(val, min_val);
-                val = fminf(val, max_val);
-                data[i] = val;
+                data[i] = clamp_preserving_nan(data[i], min_val, max_val);
             }
         }
     }
@@ -154,11 +156,7 @@ namespace lfs::core::tensor_ops {
 
         // Grid-stride loop for any array size
         for (size_t i = idx; i < n; i += stride) {
-            // Single precision math, no NaN check (PyTorch doesn't check either)
-            float val = data[i];
-            val = fmaxf(val, min_val); // max(val, min)
-            val = fminf(val, max_val); // min(result, max)
-            data[i] = val;
+            data[i] = clamp_preserving_nan(data[i], min_val, max_val);
         }
     }
 
@@ -199,18 +197,15 @@ namespace lfs::core::tensor_ops {
         if (idx + 3 < n) {
             float4 vals = reinterpret_cast<const float4*>(src)[vec_idx];
 
-            vals.x = fminf(fmaxf(vals.x, min_val), max_val);
-            vals.y = fminf(fmaxf(vals.y, min_val), max_val);
-            vals.z = fminf(fmaxf(vals.z, min_val), max_val);
-            vals.w = fminf(fmaxf(vals.w, min_val), max_val);
+            vals.x = clamp_preserving_nan(vals.x, min_val, max_val);
+            vals.y = clamp_preserving_nan(vals.y, min_val, max_val);
+            vals.z = clamp_preserving_nan(vals.z, min_val, max_val);
+            vals.w = clamp_preserving_nan(vals.w, min_val, max_val);
 
             reinterpret_cast<float4*>(dst)[vec_idx] = vals;
         } else if (idx < n) {
             for (size_t i = idx; i < n; ++i) {
-                float val = src[i];
-                val = fmaxf(val, min_val);
-                val = fminf(val, max_val);
-                dst[i] = val;
+                dst[i] = clamp_preserving_nan(src[i], min_val, max_val);
             }
         }
     }
@@ -222,10 +217,7 @@ namespace lfs::core::tensor_ops {
         size_t stride = blockDim.x * gridDim.x;
 
         for (size_t i = idx; i < n; i += stride) {
-            float val = src[i];
-            val = fmaxf(val, min_val);
-            val = fminf(val, max_val);
-            dst[i] = val;
+            dst[i] = clamp_preserving_nan(src[i], min_val, max_val);
         }
     }
 
@@ -2012,6 +2004,7 @@ namespace lfs::core::tensor_ops {
     template void launch_convert_type<uint8_t, float>(const uint8_t*, float*, size_t, cudaStream_t);
     template void launch_convert_type<int, uint8_t>(const int*, uint8_t*, size_t, cudaStream_t);
     template void launch_convert_type<uint8_t, int>(const uint8_t*, int*, size_t, cudaStream_t);
+    template void launch_convert_type<uint8_t, bool>(const uint8_t*, bool*, size_t, cudaStream_t);
     template void launch_convert_type<int64_t, float>(const int64_t*, float*, size_t, cudaStream_t);
     template void launch_convert_type<float, int64_t>(const float*, int64_t*, size_t, cudaStream_t);
     template void launch_convert_type<int, int64_t>(const int*, int64_t*, size_t, cudaStream_t);
@@ -2806,11 +2799,19 @@ namespace lfs::core::tensor_ops {
     template void launch_fill_strided<unsigned char>(
         unsigned char*, unsigned char, const std::vector<size_t>&, const std::vector<size_t>&, size_t, size_t, cudaStream_t);
 
-    // ============= FAST GPU-BASED NaN/Inf CHECK =============
-    // Returns immediately if any NaN or Inf is found (early exit via atomic)
+    // ============= FAST GPU-BASED SPECIAL-VALUE CHECK =============
+    // Returns immediately if the requested special value is found (early exit via atomic)
     // Only transfers 1 int back to CPU - orders of magnitude faster than copying entire tensor
 
-    __global__ void check_nan_inf_kernel(const float* __restrict__ data, size_t n, int* __restrict__ result) {
+    __device__ __forceinline__ bool matches_special_value(float value, bool check_nan) {
+        return check_nan ? isnan(value) : isinf(value);
+    }
+
+    __global__ void check_special_value_kernel(
+        const float* __restrict__ data,
+        size_t n,
+        int* __restrict__ result,
+        bool check_nan) {
         // Early exit if already found (check without atomic for speed)
         if (*result != 0)
             return;
@@ -2820,7 +2821,7 @@ namespace lfs::core::tensor_ops {
 
         for (size_t i = idx; i < n; i += stride) {
             const float val = data[i];
-            if (isnan(val) || isinf(val)) {
+            if (matches_special_value(val, check_nan)) {
                 atomicExch(result, 1); // Signal found
                 return;                // Early exit this thread
             }
@@ -2828,7 +2829,11 @@ namespace lfs::core::tensor_ops {
     }
 
     // Vectorized version for better memory throughput with grid-stride loop
-    __global__ void check_nan_inf_kernel_vec4(const float* __restrict__ data, size_t n, int* __restrict__ result) {
+    __global__ void check_special_value_kernel_vec4(
+        const float* __restrict__ data,
+        size_t n,
+        int* __restrict__ result,
+        bool check_nan) {
         const size_t n_vec4 = n / 4; // Number of complete float4s
         const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
 
@@ -2841,10 +2846,10 @@ namespace lfs::core::tensor_ops {
                 return;
 
             const float4 vals = reinterpret_cast<const float4*>(data)[vec_idx];
-            if (isnan(vals.x) || isinf(vals.x) ||
-                isnan(vals.y) || isinf(vals.y) ||
-                isnan(vals.z) || isinf(vals.z) ||
-                isnan(vals.w) || isinf(vals.w)) {
+            if (matches_special_value(vals.x, check_nan) ||
+                matches_special_value(vals.y, check_nan) ||
+                matches_special_value(vals.z, check_nan) ||
+                matches_special_value(vals.w, check_nan)) {
                 atomicExch(result, 1);
                 return;
             }
@@ -2857,7 +2862,7 @@ namespace lfs::core::tensor_ops {
             if (*result != 0)
                 return;
             const float val = data[remainder_start + thread_id];
-            if (isnan(val) || isinf(val)) {
+            if (matches_special_value(val, check_nan)) {
                 atomicExch(result, 1);
             }
         }
@@ -2899,38 +2904,48 @@ namespace lfs::core::tensor_ops {
         thread_local NaNCheckBuffers g_nan_check_buffers;
     } // namespace
 
-    bool has_nan_or_inf_gpu(const float* data, size_t n, cudaStream_t stream) {
-        if (n == 0)
-            return false;
+    namespace {
+        bool has_special_value_gpu(const float* data, size_t n, cudaStream_t stream, bool check_nan) {
+            if (n == 0)
+                return false;
 
-        // Initialize persistent buffers on first use
-        g_nan_check_buffers.init();
-        int* d_result = g_nan_check_buffers.d_result;
-        int* h_result = g_nan_check_buffers.h_result_pinned;
+            // Initialize persistent buffers on first use
+            g_nan_check_buffers.init();
+            int* d_result = g_nan_check_buffers.d_result;
+            int* h_result = g_nan_check_buffers.h_result_pinned;
 
-        // Zero the result flag
-        *h_result = 0;
-        LFS_CUDA_CHECK(cudaMemcpyAsync(d_result, h_result, sizeof(int), cudaMemcpyHostToDevice, stream));
+            // Zero the result flag
+            *h_result = 0;
+            LFS_CUDA_CHECK(cudaMemcpyAsync(d_result, h_result, sizeof(int), cudaMemcpyHostToDevice, stream));
 
-        // Launch kernel
-        constexpr int BLOCK_SIZE = 256;
-        constexpr int MAX_BLOCKS = 1024;
+            // Launch kernel
+            constexpr int BLOCK_SIZE = 256;
+            constexpr int MAX_BLOCKS = 1024;
 
-        // Use vectorized kernel for aligned data, scalar for small arrays
-        if (n >= 1024 && (reinterpret_cast<uintptr_t>(data) % 16) == 0) {
-            const size_t n_vec4 = (n + 3) / 4;
-            const int num_blocks = std::min(static_cast<int>((n_vec4 + BLOCK_SIZE - 1) / BLOCK_SIZE), MAX_BLOCKS);
-            check_nan_inf_kernel_vec4<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, n, d_result);
-        } else {
-            const int num_blocks = std::min(static_cast<int>((n + BLOCK_SIZE - 1) / BLOCK_SIZE), MAX_BLOCKS);
-            check_nan_inf_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, n, d_result);
+            // Use vectorized kernel for aligned data, scalar for small arrays
+            if (n >= 1024 && (reinterpret_cast<uintptr_t>(data) % 16) == 0) {
+                const size_t n_vec4 = (n + 3) / 4;
+                const int num_blocks = std::min(static_cast<int>((n_vec4 + BLOCK_SIZE - 1) / BLOCK_SIZE), MAX_BLOCKS);
+                check_special_value_kernel_vec4<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, n, d_result, check_nan);
+            } else {
+                const int num_blocks = std::min(static_cast<int>((n + BLOCK_SIZE - 1) / BLOCK_SIZE), MAX_BLOCKS);
+                check_special_value_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, n, d_result, check_nan);
+            }
+
+            // Copy result back using pinned memory (very fast!)
+            LFS_CUDA_CHECK(cudaMemcpyAsync(h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost, stream));
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+            return *h_result != 0;
         }
+    } // namespace
 
-        // Copy result back using pinned memory (very fast!)
-        LFS_CUDA_CHECK(cudaMemcpyAsync(h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost, stream));
-        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+    bool has_nan_gpu(const float* data, size_t n, cudaStream_t stream) {
+        return has_special_value_gpu(data, n, stream, true);
+    }
 
-        return *h_result != 0;
+    bool has_inf_gpu(const float* data, size_t n, cudaStream_t stream) {
+        return has_special_value_gpu(data, n, stream, false);
     }
 
 } // namespace lfs::core::tensor_ops
