@@ -9,14 +9,6 @@
 #include <curand_kernel.h>
 #include <random>
 
-#define CHECK_CUDA(call)                                        \
-    do {                                                        \
-        const cudaError_t error = (call);                       \
-        LFS_ASSERT_MSG(error == cudaSuccess,                    \
-                       std::string("CUDA operation failed: ") + \
-                           cudaGetErrorString(error));          \
-    } while (0)
-
 #define CHECK_CURAND(call)                                                   \
     do {                                                                     \
         const curandStatus_t error = (call);                                 \
@@ -116,8 +108,10 @@ namespace lfs::core {
     // ============= In-place Random Operations =============
 
     Tensor& Tensor::uniform_(float low, float high) {
-        LFS_ASSERT_MSG(is_valid(), "uniform_ requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "uniform_ requires Float32 dtype");
+        LFS_ASSERT_MSG(is_valid(),
+                       "uniform_ requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "uniform_ requires Float32 dtype");
         LFS_ASSERT_MSG(std::isfinite(low) && std::isfinite(high) && low <= high,
                        "uniform_ bounds must be finite and ordered");
         if (numel() == 0) {
@@ -147,8 +141,10 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::normal_(float mean, float std) {
-        LFS_ASSERT_MSG(is_valid(), "normal_ requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "normal_ requires Float32 dtype");
+        LFS_ASSERT_MSG(is_valid(),
+                       "normal_ requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "normal_ requires Float32 dtype");
         LFS_ASSERT_MSG(std::isfinite(mean) && std::isfinite(std) && std > 0.0f,
                        "normal_ mean and standard deviation must be finite, with std > 0");
         if (numel() == 0) {
@@ -173,9 +169,9 @@ namespace lfs::core {
                 // the n-element destination was a one-float buffer overflow.
                 auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
                 CHECK_CURAND(curandGenerateNormal(*gen, scratch.ptr<float>(), n + 1, mean, std));
-                CHECK_CUDA(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
-                                           cudaMemcpyDeviceToDevice, stream()));
-                CHECK_CUDA(cudaStreamSynchronize(stream()));
+                LFS_CUDA_CHECK(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
+                                               cudaMemcpyDeviceToDevice, stream()));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
             } else {
                 CHECK_CURAND(curandGenerateNormal(*gen, ptr<float>(), n, mean, std));
             }
@@ -195,7 +191,6 @@ namespace lfs::core {
         return *this;
     }
 
-#undef CHECK_CUDA
 #undef CHECK_CURAND
 
 } // namespace lfs::core

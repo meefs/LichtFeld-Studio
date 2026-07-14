@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <format>
 #include <string_view>
 #include <vector>
 
@@ -12,13 +13,15 @@ namespace lfs::core {
     namespace {
         void cuda_copy_async_sync(void* dst, const void* src, size_t bytes, cudaMemcpyKind kind,
                                   cudaStream_t stream, const char* context) {
-            cudaError_t err = cudaMemcpyAsync(dst, src, bytes, kind, stream);
-            if (err == cudaSuccess) {
-                err = cudaStreamSynchronize(stream);
-            }
-            LFS_ASSERT_MSG(err == cudaSuccess,
-                           std::string("CUDA copy failed in ") + context + ": " +
-                               cudaGetErrorString(err));
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpyAsync(dst, src, bytes, kind, stream),
+                "{} copy (bytes={}, copy_kind={}, source_pointer={}, "
+                "destination_pointer={}, stream={})",
+                context, bytes, static_cast<int>(kind), src, dst,
+                static_cast<const void*>(stream));
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
+                               "{} synchronization (stream={})", context,
+                               static_cast<const void*>(stream));
         }
 
         void assert_proxy_tensor(const Tensor* tensor,

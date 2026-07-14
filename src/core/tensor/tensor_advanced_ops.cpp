@@ -8,25 +8,22 @@
 #include <cmath>
 #include <numeric>
 
-#define CHECK_CUDA(call)                                        \
-    do {                                                        \
-        const cudaError_t error = (call);                       \
-        LFS_ASSERT_MSG(error == cudaSuccess,                    \
-                       std::string("CUDA operation failed: ") + \
-                           cudaGetErrorString(error));          \
-    } while (0)
-
 namespace lfs::core {
 
     // ============= PAIRWISE DISTANCE (CDIST) =============
     Tensor Tensor::cdist(const Tensor& other, float p) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "cdist requires valid tensors");
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "cdist requires valid tensors");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype() == DataType::Float32,
                        "cdist currently supports only Float32 tensors");
-        LFS_ASSERT_MSG(device_ == other.device(), "cdist requires tensors on the same device");
-        LFS_ASSERT_MSG(ndim() == 2 && other.ndim() == 2, "cdist requires rank-2 tensors");
-        LFS_ASSERT_MSG(size(1) == other.size(1), "cdist feature dimensions must match");
-        LFS_ASSERT_MSG(std::isfinite(p) && p > 0.0f, "cdist p must be finite and positive");
+        LFS_ASSERT_MSG(device_ == other.device(),
+                       "cdist requires tensors on the same device");
+        LFS_ASSERT_MSG(ndim() == 2 && other.ndim() == 2,
+                       "cdist requires rank-2 tensors");
+        LFS_ASSERT_MSG(size(1) == other.size(1),
+                       "cdist feature dimensions must match");
+        LFS_ASSERT_MSG(std::isfinite(p) && p > 0.0f,
+                       "cdist p must be finite and positive");
 
         size_t N = size(0);
         size_t M = other.size(0);
@@ -91,8 +88,10 @@ namespace lfs::core {
         LOG_DEBUG("  dim: {}, keepdim: {}", dim, keepdim);
         LOG_DEBUG("  numel: {}", numel());
 
-        LFS_ASSERT_MSG(is_valid(), "min_with_indices requires a valid tensor");
-        LFS_ASSERT_MSG(numel() > 0, "min_with_indices requires a non-empty tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "min_with_indices requires a valid tensor");
+        LFS_ASSERT_MSG(numel() > 0,
+                       "min_with_indices requires a non-empty tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
                        "min_with_indices currently supports only Float32");
 
@@ -307,8 +306,10 @@ namespace lfs::core {
         LOG_DEBUG("  Input device: {}", device_name(device_));
         LOG_DEBUG("  dim: {}, keepdim: {}", dim, keepdim);
 
-        LFS_ASSERT_MSG(is_valid(), "max_with_indices requires a valid tensor");
-        LFS_ASSERT_MSG(numel() > 0, "max_with_indices requires a non-empty tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "max_with_indices requires a valid tensor");
+        LFS_ASSERT_MSG(numel() > 0,
+                       "max_with_indices requires a non-empty tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
                        "max_with_indices currently supports only Float32");
 
@@ -476,9 +477,12 @@ namespace lfs::core {
 
     // ============= SORTING =============
     std::pair<Tensor, Tensor> Tensor::sort(int dim, bool descending) const {
-        LFS_ASSERT_MSG(is_valid(), "sort requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "sort currently supports only Float32");
-        LFS_ASSERT_MSG(numel() > 0, "sort requires a non-empty tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "sort requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "sort currently supports only Float32");
+        LFS_ASSERT_MSG(numel() > 0,
+                       "sort requires a non-empty tensor");
 
         dim = resolve_dim(dim);
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(ndim()),
@@ -579,7 +583,8 @@ namespace lfs::core {
 
     // ============= SCALAR BOOLEAN REDUCTIONS =============
     bool Tensor::any_scalar() const {
-        LFS_ASSERT_MSG(is_valid(), "any_scalar requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "any_scalar requires a valid tensor");
         if (numel() == 0) {
             return false;
         }
@@ -587,13 +592,12 @@ namespace lfs::core {
     }
 
     bool Tensor::all_scalar() const {
-        LFS_ASSERT_MSG(is_valid(), "all_scalar requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "all_scalar requires a valid tensor");
         if (numel() == 0) {
             return true;
         }
         return count_nonzero() == numel();
     }
-
-#undef CHECK_CUDA
 
 } // namespace lfs::core

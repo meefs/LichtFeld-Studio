@@ -116,44 +116,17 @@ endif()
 # Disable C++20 module scanning
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-# Get git version info
-execute_process(
-    COMMAND git rev-parse --short HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_COMMIT_HASH_SHORT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-execute_process(
-    COMMAND git describe --tags --dirty --always --match "v*"
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_TAGGED_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT GIT_COMMIT_HASH_SHORT AND DEFINED ENV{GITHUB_SHA} AND NOT "$ENV{GITHUB_SHA}" STREQUAL "")
-    string(SUBSTRING "$ENV{GITHUB_SHA}" 0 7 GIT_COMMIT_HASH_SHORT)
-endif()
-if(NOT GIT_TAGGED_VERSION)
-    if(DEFINED ENV{GITHUB_REF_TYPE} AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag" AND
-       DEFINED ENV{GITHUB_REF_NAME} AND NOT "$ENV{GITHUB_REF_NAME}" STREQUAL "")
-        set(GIT_TAGGED_VERSION "$ENV{GITHUB_REF_NAME}")
-    elseif(GIT_COMMIT_HASH_SHORT)
-        set(GIT_TAGGED_VERSION "${GIT_COMMIT_HASH_SHORT}")
-    endif()
-endif()
-if(NOT GIT_COMMIT_HASH_SHORT)
-    set(GIT_COMMIT_HASH_SHORT "unknown")
-endif()
-if(NOT GIT_TAGGED_VERSION)
-    set(GIT_TAGGED_VERSION "unknown")
-endif()
-
-# Generate git_version.h at configure time
-file(WRITE "${CMAKE_BINARY_DIR}/include/git_version.h"
-"#pragma once\n\
-#define GIT_COMMIT_HASH_SHORT \"${GIT_COMMIT_HASH_SHORT}\"\n\
-#define GIT_TAGGED_VERSION \"${GIT_TAGGED_VERSION}\"\n"
+set(GIT_SRC_DIR "${CMAKE_SOURCE_DIR}")
+set(GIT_VERSION_HEADER "${CMAKE_BINARY_DIR}/include/git_version.h")
+include("${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake")
+add_custom_target(lfs_git_version ALL
+    BYPRODUCTS "${CMAKE_BINARY_DIR}/include/git_version.h"
+    COMMAND ${CMAKE_COMMAND}
+            "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
+            "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
+            -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
+    COMMENT "Refreshing git_version.h"
+    VERBATIM
 )
 
 # App/core ABI tripwire. Hash every lfs_core implementation and interface input,
@@ -190,14 +163,10 @@ get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
-option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Debug options
-option(ENABLE_TENSOR_VALIDATION "Enable runtime tensor NaN/Inf validation" OFF)
-option(ENABLE_CUDA_DEBUG_SYNC "Enable synchronous CUDA kernel checking (slow)" OFF)
-option(ENABLE_TENSOR_OP_TRACING "Enable tensor operation tracing" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeveloperOptions.cmake")
 
 # Add -rdynamic for backtrace symbol resolution
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -495,26 +464,33 @@ configure_file(
 # Project-wide definitions
 add_definitions(-DPROJECT_ROOT_PATH="${PROJ_ROOT_DIR}")
 
-# CUDA device debugging (-G flag) generates huge object files. Disable in CI.
-option(CUDA_DEVICE_DEBUG "Enable CUDA device debugging (-G flag)" ON)
-
-if(CUDA_DEVICE_DEBUG)
-    set(LFS_CUDA_DEVICE_DEBUG_FLAGS "-G" CACHE INTERNAL "")
-else()
-    set(LFS_CUDA_DEVICE_DEBUG_FLAGS "" CACHE INTERNAL "")
-endif()
-
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-    if(CUDA_DEVICE_DEBUG)
-        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -G -O0")
-    else()
-        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
-    endif()
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
 endif()
 
 # External dependencies (EXCLUDE_FROM_ALL to handle install ourselves)
 add_subdirectory(external EXCLUDE_FROM_ALL)
+
+# Keep LichtFeld's ordinary MSVC translation units on nvcc's conforming host
+# preprocessor and report the selected C++ language version accurately.
+# This is intentionally added after external/ so vendored targets keep their
+# upstream compiler settings.
+if(MSVC)
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
+    )
+endif()
+
+if(LFS_ENABLE_CUDA_DEVICE_DEBUG)
+    add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
+endif()
+
+add_compile_definitions(
+    $<$<CONFIG:Debug>:DEBUG_BUILD>
+    $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:RELEASE_BUILD>
+)
 
 # =============================================================================
 # LIBRARY MODULES
@@ -551,6 +527,16 @@ add_executable(${PROJECT_NAME}
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
 )
+
+foreach(_lfs_git_version_consumer IN ITEMS
+        ${PROJECT_NAME}
+        lfs_visualizer
+        lfs_py
+        lfs_mcp)
+    if(TARGET ${_lfs_git_version_consumer})
+        add_dependencies(${_lfs_git_version_consumer} lfs_git_version)
+    endif()
+endforeach()
 
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -1129,58 +1115,16 @@ elseif(WIN32)
     endif()
 endif()
 
-# Build type configuration function
-function(configure_build_type target)
-    get_target_property(target_type ${target} TYPE)
-
-    if(target_type STREQUAL "INTERFACE_LIBRARY")
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} INTERFACE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release|RelWithDebInfo|MinSizeRel")
-            target_compile_definitions(${target} INTERFACE RELEASE_BUILD)
-        endif()
-        # Debug options for interface libraries
-        if(ENABLE_TENSOR_VALIDATION)
-            target_compile_definitions(${target} INTERFACE TENSOR_VALIDATION_ENABLED)
-        endif()
-        if(ENABLE_CUDA_DEBUG_SYNC)
-            target_compile_definitions(${target} INTERFACE CUDA_DEBUG_SYNC)
-        endif()
-        if(ENABLE_TENSOR_OP_TRACING)
-            target_compile_definitions(${target} INTERFACE TENSOR_OP_TRACING)
-        endif()
-    else()
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} PRIVATE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release|RelWithDebInfo|MinSizeRel")
-            target_compile_definitions(${target} PRIVATE RELEASE_BUILD)
-        endif()
-        # Debug options for regular libraries
-        if(ENABLE_TENSOR_VALIDATION)
-            target_compile_definitions(${target} PRIVATE TENSOR_VALIDATION_ENABLED)
-        endif()
-        if(ENABLE_CUDA_DEBUG_SYNC)
-            target_compile_definitions(${target} PRIVATE CUDA_DEBUG_SYNC)
-        endif()
-        if(ENABLE_TENSOR_OP_TRACING)
-            target_compile_definitions(${target} PRIVATE TENSOR_OP_TRACING)
-        endif()
-    endif()
-endfunction()
-
-# Apply build configuration to all targets
-configure_build_type(fastlfs_backend)
-configure_build_type(lfs_core)
-configure_build_type(lfs_core_cuda)
-configure_build_type(lfs_training)
-configure_build_type(lfs_preprocessing)
-configure_build_type(lfs_rendering_tensor)
-configure_build_type(lfs_rendering)
-configure_build_type(lfs_visualizer)
-configure_build_type(lfs_io)
-configure_build_type(lfs_geometry)
-configure_build_type(lfs_tcp)
-configure_build_type(${PROJECT_NAME})
+if(UNIX)
+    add_custom_target(validate-gui
+        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.sh"
+                --binary "$<TARGET_FILE:${PROJECT_NAME}>"
+        DEPENDS ${PROJECT_NAME}
+        USES_TERMINAL
+        COMMENT "Launching LichtFeld Studio with source-built Vulkan validation"
+        VERBATIM
+    )
+endif()
 
 if(LFS_FAST_COMPILE AND MSVC)
     function(lfs_enable_fast_cxx_compile target)
