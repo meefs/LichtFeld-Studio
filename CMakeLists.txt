@@ -16,11 +16,22 @@ cmake_minimum_required(VERSION 3.30)
 # Keep test-only packages out of the application dependency graph. Command-line
 # cache values are visible before project(), when the vcpkg toolchain resolves
 # manifest features.
-list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests)
+list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests vulkan-validation)
 if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
     list(APPEND VCPKG_MANIFEST_FEATURES tests)
-    list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
 endif()
+
+set(_lfs_vulkan_validation_feature OFF)
+if(DEFINED LFS_ENABLE_VULKAN_VALIDATION)
+    set(_lfs_vulkan_validation_feature "${LFS_ENABLE_VULKAN_VALIDATION}")
+elseif(NOT CMAKE_CONFIGURATION_TYPES AND CMAKE_BUILD_TYPE MATCHES "^(Debug|RelWithDebInfo)$")
+    set(_lfs_vulkan_validation_feature ON)
+endif()
+if(_lfs_vulkan_validation_feature)
+    list(APPEND VCPKG_MANIFEST_FEATURES vulkan-validation)
+endif()
+list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
+unset(_lfs_vulkan_validation_feature)
 
 # vcpkg manifest install runs during CMake configure/regeneration, outside the
 # native build tool's `cmake --build -j ...` limit. Cap vcpkg separately before
