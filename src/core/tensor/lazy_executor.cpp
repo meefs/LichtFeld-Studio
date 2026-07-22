@@ -641,7 +641,7 @@ namespace lfs::core::internal {
         if (node_id == 0 || active_context == nullptr || !materialized.is_valid()) {
             return;
         }
-        active_context->cached_materializations.emplace(node_id, materialized);
+        active_context->cached_materializations.insert_or_assign(node_id, materialized);
         record_relaxed_max(
             lazy_executor_diagnostics_counters().max_context_cache_entries,
             static_cast<uint64_t>(active_context->cached_materializations.size()));

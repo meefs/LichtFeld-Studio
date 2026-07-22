@@ -3247,27 +3247,8 @@ namespace lfs::vis {
         uint32_t compatible_memory_type_bits = memory_requirements.memoryTypeBits;
 
 #ifdef _WIN32
-        // Unlike POSIX OPAQUE_FD, Vulkan permits querying a foreign NT handle.
-        // Restrict the buffer-compatible mask to the types the CUDA payload can
-        // actually be imported as before selecting a device-local type.
-        auto get_memory_handle_properties =
-            reinterpret_cast<PFN_vkGetMemoryWin32HandlePropertiesKHR>(
-                vkGetDeviceProcAddr(device_, "vkGetMemoryWin32HandlePropertiesKHR"));
-        if (get_memory_handle_properties == nullptr) {
-            destroyExternalBuffer(out);
-            return fail("vkGetMemoryWin32HandlePropertiesKHR is unavailable");
-        }
-        VkMemoryWin32HandlePropertiesKHR handle_properties{};
-        handle_properties.sType = VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR;
-        result = get_memory_handle_properties(
-            device_, kExternalMemoryHandleType, handle, &handle_properties);
-        if (result != VK_SUCCESS) {
-            destroyExternalBuffer(out);
-            return fail(std::format(
-                "vkGetMemoryWin32HandlePropertiesKHR failed: {}",
-                vkResultToString(result)));
-        }
-        compatible_memory_type_bits &= handle_properties.memoryTypeBits;
+        // vkGetMemoryWin32HandlePropertiesKHR rejects OPAQUE_WIN32 (VUID 00666).
+        // The buffer requirements are the only legal Vulkan memory-type mask.
 
         VkImportMemoryWin32HandleInfoKHR import_info{};
         import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
