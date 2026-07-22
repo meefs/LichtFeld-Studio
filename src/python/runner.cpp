@@ -1372,6 +1372,17 @@ _add_dll_dirs()
                state == PluginPreloadState::Loading;
     }
 
+    bool is_plugin_preload_blocking_python() {
+        const auto state = g_plugin_preload.state.load(std::memory_order_acquire);
+        if (state != PluginPreloadState::Discovering &&
+            state != PluginPreloadState::Loading)
+            return false;
+
+        std::lock_guard lock(g_plugin_preload.mutex);
+        return g_plugin_preload.phase != "environment" &&
+               g_plugin_preload.phase != "dependencies";
+    }
+
     void request_plugin_preload_stop() {
         if (!is_plugin_preload_running())
             return;

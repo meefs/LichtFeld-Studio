@@ -97,6 +97,9 @@ namespace lfs::python {
      */
     bool is_plugin_preload_running();
 
+    /// @brief True while startup plugin preload may block Python calls.
+    bool is_plugin_preload_blocking_python();
+
     /**
      * @brief Request cooperative cancellation of startup plugin loading.
      *        Safe to call from the render thread without acquiring the GIL.

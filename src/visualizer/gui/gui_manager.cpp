@@ -5477,12 +5477,12 @@ namespace lfs::vis::gui {
             focus.want_capture_keyboard = io.WantCaptureKeyboard || rmlui_manager_.wantsCaptureKeyboard();
             focus.want_text_input = io.WantTextInput || rmlui_manager_.wantsTextInput();
         }
-        const bool startup_plugin_preload_running = python::is_plugin_preload_running();
+        const bool startup_plugin_preload_blocking_python = python::is_plugin_preload_blocking_python();
 
         // Run queued Python/UI mutations before panel registries take draw snapshots.
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.python_flush_callbacks", 0.25);
-            if (!startup_plugin_preload_running && python::has_pending_graphics_callbacks())
+            if (!startup_plugin_preload_blocking_python && python::has_pending_graphics_callbacks())
                 python::flush_graphics_callbacks();
         }
 
@@ -5749,7 +5749,7 @@ namespace lfs::vis::gui {
         draw_ctx.ui_hidden = ui_hidden_;
         draw_ctx.frame_serial = ++panel_frame_serial_;
         draw_ctx.scene_generation = python::get_scene_generation();
-        draw_ctx.suppress_non_native_panels = startup_plugin_preload_running;
+        draw_ctx.suppress_non_native_panels = startup_plugin_preload_blocking_python;
         if (auto* sm = ctx.viewer->getSceneManager())
             draw_ctx.has_selection = sm->hasSelectedNode();
         if (auto* cc = lfs::event::command_center())
@@ -6324,7 +6324,7 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (!startup_plugin_preload_running &&
+        if (!startup_plugin_preload_blocking_python &&
             lfs::python::has_python_hooks("viewport_overlay", "draw")) {
             LOG_TIMER_THRESHOLD("gui_render.viewport_overlay.python_hooks", 0.25);
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
@@ -6405,11 +6405,11 @@ namespace lfs::vis::gui {
                 reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
         }
 
-        if (!startup_plugin_preload_running && python::has_python_modals()) {
+        if (!startup_plugin_preload_blocking_python && python::has_python_modals()) {
             LOG_TIMER("gui_render.python_modals_and_popups");
             python::draw_python_modals(scene);
         }
-        if (!startup_plugin_preload_running && python::has_python_popups()) {
+        if (!startup_plugin_preload_blocking_python && python::has_python_popups()) {
             LOG_TIMER("gui_render.python_popups");
             python::draw_python_popups(scene);
         }
@@ -7137,8 +7137,7 @@ namespace lfs::vis::gui {
         registerErrorEventBridge();
 
         ui::FileDropReceived::when([this](const auto&) {
-            if (startup_overlay_.isPluginLoadComplete())
-                startup_overlay_.dismiss();
+            startup_overlay_.dismiss();
             drag_drop_.resetHovering();
         });
 
@@ -7506,7 +7505,7 @@ namespace lfs::vis::gui {
         draw_ctx.scene = scene;
         draw_ctx.ui_hidden = ui_hidden_;
         draw_ctx.scene_generation = python::get_scene_generation();
-        draw_ctx.suppress_non_native_panels = python::is_plugin_preload_running();
+        draw_ctx.suppress_non_native_panels = python::is_plugin_preload_blocking_python();
         if (scene_manager)
             draw_ctx.has_selection = scene_manager->hasSelectedNode();
         if (auto* cc = lfs::event::command_center())
@@ -7600,8 +7599,7 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::dismissStartupOverlay() {
-        if (startup_overlay_.isPluginLoadComplete())
-            startup_overlay_.dismiss();
+        startup_overlay_.dismiss();
     }
 
     void GuiManager::setStartupPluginLoadState(const bool started,
