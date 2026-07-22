@@ -490,8 +490,8 @@ namespace lfs::vis {
         // call replaceFenceSignaled directly and never enter here.
         void rejectSubmissionAndMaybeReplace(const char* const failed_operation,
                                              const VkResult failed_result) {
-            using lfs::rendering::SubmissionTransition;
             using lfs::rendering::apply_submission_transition;
+            using lfs::rendering::SubmissionTransition;
             auto effects = apply_submission_transition(
                 submission_state_,
                 SubmissionTransition::SubmitRejected,
@@ -1804,8 +1804,8 @@ namespace lfs::vis {
 
             // Phase 7C-P2 Appendix A.1: ResetPreWaitReplacement lifecycle.
             {
-                using lfs::rendering::SubmissionTransition;
                 using lfs::rendering::apply_submission_transition;
+                using lfs::rendering::SubmissionTransition;
                 auto begin = apply_submission_transition(
                     submission_state_,
                     SubmissionTransition::BeginLifecycle,
@@ -1827,8 +1827,8 @@ namespace lfs::vis {
                 return std::unexpected<std::string>(vkError("vkResetFences", r));
             }
             {
-                using lfs::rendering::SubmissionTransition;
                 using lfs::rendering::apply_submission_transition;
+                using lfs::rendering::SubmissionTransition;
                 auto fence_reset = apply_submission_transition(
                     submission_state_,
                     SubmissionTransition::FenceReset,
@@ -1873,8 +1873,8 @@ namespace lfs::vis {
                 return std::unexpected<std::string>(vkError("vkQueueSubmit", r));
             }
             {
-                using lfs::rendering::SubmissionTransition;
                 using lfs::rendering::apply_submission_transition;
+                using lfs::rendering::SubmissionTransition;
                 auto accepted = apply_submission_transition(
                     submission_state_,
                     SubmissionTransition::SubmitAccepted,
@@ -2058,8 +2058,8 @@ namespace lfs::vis {
 
             // Phase 7C-P2 Appendix A.1: ResetPreWaitReplacement lifecycle (readback).
             {
-                using lfs::rendering::SubmissionTransition;
                 using lfs::rendering::apply_submission_transition;
+                using lfs::rendering::SubmissionTransition;
                 auto begin = apply_submission_transition(
                     submission_state_,
                     SubmissionTransition::BeginLifecycle,
@@ -2078,8 +2078,8 @@ namespace lfs::vis {
                 return std::unexpected<std::string>(vkError("vkResetFences(point-cloud readback)", r));
             }
             {
-                using lfs::rendering::SubmissionTransition;
                 using lfs::rendering::apply_submission_transition;
+                using lfs::rendering::SubmissionTransition;
                 auto fence_reset = apply_submission_transition(
                     submission_state_,
                     SubmissionTransition::FenceReset,
@@ -2126,8 +2126,8 @@ namespace lfs::vis {
                 return std::unexpected<std::string>(vkError("vkQueueSubmit(point-cloud readback)", r));
             }
             {
-                using lfs::rendering::SubmissionTransition;
                 using lfs::rendering::apply_submission_transition;
+                using lfs::rendering::SubmissionTransition;
                 auto accepted = apply_submission_transition(
                     submission_state_,
                     SubmissionTransition::SubmitAccepted,

@@ -361,10 +361,10 @@ public:
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                "DeviceGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_started_batch={})",
-                cbip,
-                pipeline->isCommandBatchInProgress(),
-                !cbip),
+                    "DeviceGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_started_batch={})",
+                    cbip,
+                    pipeline->isCommandBatchInProgress(),
+                    !cbip),
                 LFS_SOURCE_SITE_CURRENT());
         }
     }
@@ -405,10 +405,10 @@ public:
             pipeline->cancelCommandBatch();
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                "HostGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_paused_batch={})",
-                cbip,
-                pipeline->isCommandBatchInProgress(),
-                cbip),
+                    "HostGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_paused_batch={})",
+                    cbip,
+                    pipeline->isCommandBatchInProgress(),
+                    cbip),
                 LFS_SOURCE_SITE_CURRENT());
         }
     }

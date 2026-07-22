@@ -7,11 +7,11 @@
 #include "config.h"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "viewport_pass_graph.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
 #include "vulkan_scene_image_uploader.hpp"
-#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
@@ -619,12 +619,11 @@ namespace lfs::vis {
                     vkCreateSampler(device, &sampler_info, nullptr, &scene_sampler),
                     "vkCreateSampler(device, &sampler_info, nullptr, &scene_sampler)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport scene sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
-                                vkHandleValue(device),
-                                static_cast<int>(sampler_info.magFilter),
-                                static_cast<int>(sampler_info.minFilter),
-                                static_cast<int>(sampler_info.addressModeU)
-                            ),
+                        "Viewport scene sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                        vkHandleValue(device),
+                        static_cast<int>(sampler_info.magFilter),
+                        static_cast<int>(sampler_info.minFilter),
+                        static_cast<int>(sampler_info.addressModeU)),
                     std::source_location::current())) {
                 return false;
             }
@@ -648,11 +647,10 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &scene_descriptor_layout),
                     "vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &scene_descriptor_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport scene descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                                vkHandleValue(device),
-                                layout_info.bindingCount,
-                                static_cast<int>(binding.descriptorType)
-                            ),
+                        "Viewport scene descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                        vkHandleValue(device),
+                        layout_info.bindingCount,
+                        static_cast<int>(binding.descriptorType)),
                     std::source_location::current())) {
                 return false;
             }
@@ -671,12 +669,11 @@ namespace lfs::vis {
                     vkCreateDescriptorPool(device, &pool_info, nullptr, &scene_descriptor_pool),
                     "vkCreateDescriptorPool(device, &pool_info, nullptr, &scene_descriptor_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport scene descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                                vkHandleValue(device),
-                                frame_resources.size(),
-                                pool_info.maxSets,
-                                pool_size.descriptorCount
-                            ),
+                        "Viewport scene descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                        vkHandleValue(device),
+                        frame_resources.size(),
+                        pool_info.maxSets,
+                        pool_size.descriptorCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -695,12 +692,11 @@ namespace lfs::vis {
                     vkAllocateDescriptorSets(device, &alloc_info, sets.data()),
                     "vkAllocateDescriptorSets(device, &alloc_info, sets.data())",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport scene descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                                vkHandleValue(device),
-                                vkHandleValue(scene_descriptor_pool),
-                                vkHandleValue(scene_descriptor_layout),
-                                alloc_info.descriptorSetCount
-                            ),
+                        "Viewport scene descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                        vkHandleValue(device),
+                        vkHandleValue(scene_descriptor_pool),
+                        vkHandleValue(scene_descriptor_layout),
+                        alloc_info.descriptorSetCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -728,11 +724,10 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &grid_descriptor_layout),
                     "vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &grid_descriptor_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport grid descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                                vkHandleValue(device),
-                                layout_info.bindingCount,
-                                static_cast<int>(binding.descriptorType)
-                            ),
+                        "Viewport grid descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                        vkHandleValue(device),
+                        layout_info.bindingCount,
+                        static_cast<int>(binding.descriptorType)),
                     std::source_location::current())) {
                 return false;
             }
@@ -751,12 +746,11 @@ namespace lfs::vis {
                     vkCreateDescriptorPool(device, &pool_info, nullptr, &grid_descriptor_pool),
                     "vkCreateDescriptorPool(device, &pool_info, nullptr, &grid_descriptor_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport grid descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                                vkHandleValue(device),
-                                frame_resources.size(),
-                                pool_info.maxSets,
-                                pool_size.descriptorCount
-                            ),
+                        "Viewport grid descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                        vkHandleValue(device),
+                        frame_resources.size(),
+                        pool_info.maxSets,
+                        pool_size.descriptorCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -775,12 +769,11 @@ namespace lfs::vis {
                     vkAllocateDescriptorSets(device, &alloc_info, sets.data()),
                     "vkAllocateDescriptorSets(device, &alloc_info, sets.data())",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport grid descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                                vkHandleValue(device),
-                                vkHandleValue(grid_descriptor_pool),
-                                vkHandleValue(grid_descriptor_layout),
-                                alloc_info.descriptorSetCount
-                            ),
+                        "Viewport grid descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                        vkHandleValue(device),
+                        vkHandleValue(grid_descriptor_pool),
+                        vkHandleValue(grid_descriptor_layout),
+                        alloc_info.descriptorSetCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -809,11 +802,10 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &frustum_descriptor_layout),
                     "vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &frustum_descriptor_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport frustum descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                                vkHandleValue(device),
-                                layout_info.bindingCount,
-                                static_cast<int>(binding.descriptorType)
-                            ),
+                        "Viewport frustum descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                        vkHandleValue(device),
+                        layout_info.bindingCount,
+                        static_cast<int>(binding.descriptorType)),
                     std::source_location::current())) {
                 return false;
             }
@@ -832,12 +824,11 @@ namespace lfs::vis {
                     vkCreateDescriptorPool(device, &pool_info, nullptr, &frustum_descriptor_pool),
                     "vkCreateDescriptorPool(device, &pool_info, nullptr, &frustum_descriptor_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport frustum descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                                vkHandleValue(device),
-                                frame_resources.size(),
-                                pool_info.maxSets,
-                                pool_size.descriptorCount
-                            ),
+                        "Viewport frustum descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                        vkHandleValue(device),
+                        frame_resources.size(),
+                        pool_info.maxSets,
+                        pool_size.descriptorCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -856,12 +847,11 @@ namespace lfs::vis {
                     vkAllocateDescriptorSets(device, &alloc_info, sets.data()),
                     "vkAllocateDescriptorSets(device, &alloc_info, sets.data())",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport frustum descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                                vkHandleValue(device),
-                                vkHandleValue(frustum_descriptor_pool),
-                                vkHandleValue(frustum_descriptor_layout),
-                                alloc_info.descriptorSetCount
-                            ),
+                        "Viewport frustum descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                        vkHandleValue(device),
+                        vkHandleValue(frustum_descriptor_pool),
+                        vkHandleValue(frustum_descriptor_layout),
+                        alloc_info.descriptorSetCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -1070,12 +1060,11 @@ namespace lfs::vis {
                     vkCreateSampler(device, &sampler_info, nullptr, &shape_overlay_depth_sampler),
                     "vkCreateSampler(device, &sampler_info, nullptr, &shape_overlay_depth_sampler)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport shape-overlay depth sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
-                                vkHandleValue(device),
-                                static_cast<int>(sampler_info.magFilter),
-                                static_cast<int>(sampler_info.minFilter),
-                                static_cast<int>(sampler_info.addressModeU)
-                            ),
+                        "Viewport shape-overlay depth sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                        vkHandleValue(device),
+                        static_cast<int>(sampler_info.magFilter),
+                        static_cast<int>(sampler_info.minFilter),
+                        static_cast<int>(sampler_info.addressModeU)),
                     std::source_location::current())) {
                 return false;
             }
@@ -1104,20 +1093,19 @@ namespace lfs::vis {
             VmaAllocationInfo allocation_info{};
             if (!vk_try_bool(
                     vmaCreateImage(allocator,
-                               &img_info,
-                               &alloc,
-                               &shape_overlay_dummy_depth_image,
-                               &shape_overlay_dummy_depth_alloc,
-                               &allocation_info),
+                                   &img_info,
+                                   &alloc,
+                                   &shape_overlay_dummy_depth_image,
+                                   &shape_overlay_dummy_depth_alloc,
+                                   &allocation_info),
                     "vmaCreateImage(allocator, &img_info, &alloc, &shape_overlay_dummy_depth_image, &shape_overlay_dummy_depth_alloc, &allocation_info)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport shape-overlay dummy-depth image allocation failed (allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                img_info.extent.width,
-                                img_info.extent.height,
-                                static_cast<int>(img_info.format),
-                                static_cast<std::uint32_t>(img_info.usage)
-                            ),
+                        "Viewport shape-overlay dummy-depth image allocation failed (allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        img_info.extent.width,
+                        img_info.extent.height,
+                        static_cast<int>(img_info.format),
+                        static_cast<std::uint32_t>(img_info.usage)),
                     std::source_location::current())) {
                 return false;
             }
@@ -1139,12 +1127,11 @@ namespace lfs::vis {
                     vkCreateImageView(device, &view_info, nullptr, &shape_overlay_dummy_depth_view),
                     "vkCreateImageView(device, &view_info, nullptr, &shape_overlay_dummy_depth_view)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport shape-overlay dummy-depth image-view creation failed (device={:#x}, image={:#x}, format={}, aspect_mask={:#x})",
-                                vkHandleValue(device),
-                                vkHandleValue(view_info.image),
-                                static_cast<int>(view_info.format),
-                                static_cast<std::uint32_t>(view_info.subresourceRange.aspectMask)
-                            ),
+                        "Viewport shape-overlay dummy-depth image-view creation failed (device={:#x}, image={:#x}, format={}, aspect_mask={:#x})",
+                        vkHandleValue(device),
+                        vkHandleValue(view_info.image),
+                        static_cast<int>(view_info.format),
+                        static_cast<std::uint32_t>(view_info.subresourceRange.aspectMask)),
                     std::source_location::current())) {
                 return false;
             }
@@ -1174,11 +1161,10 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &shape_overlay_descriptor_layout),
                     "vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &shape_overlay_descriptor_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport shape-overlay descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                                vkHandleValue(device),
-                                layout_info.bindingCount,
-                                static_cast<int>(binding.descriptorType)
-                            ),
+                        "Viewport shape-overlay descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                        vkHandleValue(device),
+                        layout_info.bindingCount,
+                        static_cast<int>(binding.descriptorType)),
                     std::source_location::current())) {
                 return false;
             }
@@ -1197,12 +1183,11 @@ namespace lfs::vis {
                     vkCreateDescriptorPool(device, &desc_pool_info, nullptr, &shape_overlay_descriptor_pool),
                     "vkCreateDescriptorPool(device, &desc_pool_info, nullptr, &shape_overlay_descriptor_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport shape-overlay descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                                vkHandleValue(device),
-                                frame_resources.size(),
-                                desc_pool_info.maxSets,
-                                pool_size.descriptorCount
-                            ),
+                        "Viewport shape-overlay descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                        vkHandleValue(device),
+                        frame_resources.size(),
+                        desc_pool_info.maxSets,
+                        pool_size.descriptorCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -1221,12 +1206,11 @@ namespace lfs::vis {
                     vkAllocateDescriptorSets(device, &alloc_info, sets.data()),
                     "vkAllocateDescriptorSets(device, &alloc_info, sets.data())",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Viewport shape-overlay descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                                vkHandleValue(device),
-                                vkHandleValue(shape_overlay_descriptor_pool),
-                                vkHandleValue(shape_overlay_descriptor_layout),
-                                alloc_info.descriptorSetCount
-                            ),
+                        "Viewport shape-overlay descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                        vkHandleValue(device),
+                        vkHandleValue(shape_overlay_descriptor_pool),
+                        vkHandleValue(shape_overlay_descriptor_layout),
+                        alloc_info.descriptorSetCount),
                     std::source_location::current())) {
                 return false;
             }

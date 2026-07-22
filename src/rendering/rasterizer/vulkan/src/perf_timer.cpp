@@ -51,11 +51,11 @@ namespace PerfTimer {
         if (hostHold) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                "PerfTimer::hostTic cannot start an already-running host interval (host_hold={}, accumulated_seconds={}, marker_count={}, pushed_marker_count={})",
-                hostHold,
-                hostTimeDelta,
-                marks.size(),
-                pushedMarks.size()),
+                    "PerfTimer::hostTic cannot start an already-running host interval (host_hold={}, accumulated_seconds={}, marker_count={}, pushed_marker_count={})",
+                    hostHold,
+                    hostTimeDelta,
+                    marks.size(),
+                    pushedMarks.size()),
                 LFS_SOURCE_SITE_CURRENT());
         }
         hostHold = true;
@@ -70,11 +70,11 @@ namespace PerfTimer {
         if (!hostHold) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                "PerfTimer::hostToc requires a running host interval (host_hold={}, accumulated_seconds={}, marker_count={}, pushed_marker_count={})",
-                hostHold,
-                hostTimeDelta,
-                marks.size(),
-                pushedMarks.size()),
+                    "PerfTimer::hostToc requires a running host interval (host_hold={}, accumulated_seconds={}, marker_count={}, pushed_marker_count={})",
+                    hostHold,
+                    hostTimeDelta,
+                    marks.size(),
+                    pushedMarks.size()),
                 LFS_SOURCE_SITE_CURRENT());
         }
         hostHold = false;
@@ -102,10 +102,10 @@ namespace PerfTimer {
         if (!module->writeTimestamp(-1)) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                "PerfTimer::pushMarker could not write an exit timestamp (module={:#x}, marker_count={}, pushed_marker_count={})",
-                lfs::rendering::vkHandleValue(module),
-                marks.size(),
-                pushedMarks.size()),
+                    "PerfTimer::pushMarker could not write an exit timestamp (module={:#x}, marker_count={}, pushed_marker_count={})",
+                    lfs::rendering::vkHandleValue(module),
+                    marks.size(),
+                    pushedMarks.size()),
                 LFS_SOURCE_SITE_CURRENT());
         }
 
@@ -121,11 +121,11 @@ namespace PerfTimer {
         }
         lfs::rendering::throw_renderer_contract(
             std::format(
-            "PerfTimer::pushMarker found no matching open marker (module={:#x}, marker_count={}, pushed_marker_count={}, search_depth={})",
-            lfs::rendering::vkHandleValue(module),
-            marks.size(),
-            pushedMarks.size(),
-            depth),
+                "PerfTimer::pushMarker found no matching open marker (module={:#x}, marker_count={}, pushed_marker_count={}, search_depth={})",
+                lfs::rendering::vkHandleValue(module),
+                marks.size(),
+                pushedMarks.size(),
+                depth),
             LFS_SOURCE_SITE_CURRENT());
     }
 
@@ -137,11 +137,11 @@ namespace PerfTimer {
             if (!module->writeTimestamp(1)) {
                 lfs::rendering::throw_renderer_contract(
                     std::format(
-                    "PerfTimer::popMarkers could not reopen a paused marker (module={:#x}, stage={}, remaining_pushed={}, marker_count={})",
-                    lfs::rendering::vkHandleValue(module),
-                    static_cast<int>(stage),
-                    pushedMarks.size(),
-                    marks.size()),
+                        "PerfTimer::popMarkers could not reopen a paused marker (module={:#x}, stage={}, remaining_pushed={}, marker_count={})",
+                        lfs::rendering::vkHandleValue(module),
+                        static_cast<int>(stage),
+                        pushedMarks.size(),
+                        marks.size()),
                     LFS_SOURCE_SITE_CURRENT());
             }
             marks.emplace_back(static_cast<int>(stage), 1);
@@ -165,9 +165,9 @@ namespace PerfTimer {
         if (times.size() != batch_marks.size()) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                "PerfTimer batch update requires one marker per timestamp (timestamp_count={}, marker_count={})",
-                times.size(),
-                batch_marks.size()),
+                    "PerfTimer batch update requires one marker per timestamp (timestamp_count={}, marker_count={})",
+                    times.size(),
+                    batch_marks.size()),
                 LFS_SOURCE_SITE_CURRENT());
         }
         std::vector<std::pair<size_t, double>> results(TrainStage::END, {0, 0.0});
@@ -204,11 +204,11 @@ namespace PerfTimer {
         if (!stack.empty()) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                "PerfTimer batch ended with unclosed markers (remaining_depth={}, top_stage={}, timestamp_count={}, marker_count={})",
-                stack.size(),
-                static_cast<int>(stack.back().first),
-                times.size(),
-                batch_marks.size()),
+                    "PerfTimer batch ended with unclosed markers (remaining_depth={}, top_stage={}, timestamp_count={}, marker_count={})",
+                    stack.size(),
+                    static_cast<int>(stack.back().first),
+                    times.size(),
+                    batch_marks.size()),
                 LFS_SOURCE_SITE_CURRENT());
         }
         for (int stage = 0; stage < int(TrainStage::END); ++stage) {
