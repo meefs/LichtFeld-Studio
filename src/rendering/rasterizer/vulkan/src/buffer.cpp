@@ -63,7 +63,8 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(sorting_gauss_idx_1);
     ADD_OWNED(sorting_gauss_idx_2);
     ADD_OWNED(tile_sort_count);
-    ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(depth_wave_dispatch);
+    ADD_OWNED(wave_predicates);
     ADD_OWNED(tile_ranges);
     ADD_OWNED(tile_batch_counts);
     ADD_OWNED(tile_batch_offsets);
@@ -73,6 +74,7 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(tile_batch_n_contributors);
     ADD_OWNED(pixel_state);
     ADD_OWNED(pixel_depth);
+    ADD_OWNED(pixel_depth_weight);
     ADD_OWNED(n_contributors);
     ADD_OWNED(_cumsum_blockSums);
     ADD_OWNED(_cumsum_blockSums2);
@@ -143,7 +145,8 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(sorting_gauss_idx_1);
     ADD_OWNED(sorting_gauss_idx_2);
     ADD_OWNED(tile_sort_count);
-    ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(depth_wave_dispatch);
+    ADD_OWNED(wave_predicates);
     ADD_OWNED(tile_ranges);
     ADD_OWNED(tile_batch_counts);
     ADD_OWNED(tile_batch_offsets);
@@ -153,6 +156,7 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(tile_batch_n_contributors);
     ADD_OWNED(pixel_state);
     ADD_OWNED(pixel_depth);
+    ADD_OWNED(pixel_depth_weight);
     ADD_OWNED(n_contributors);
     ADD_OWNED(_cumsum_blockSums);
     ADD_OWNED(_cumsum_blockSums2);
@@ -243,7 +247,8 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                        buffer.extra_usage;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo aci = {};
@@ -271,6 +276,7 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
                 static_cast<int>(result)),
             LFS_SOURCE_SITE_CURRENT());
     }
+    buffer.created_with_extra_usage = buffer.extra_usage;
 
     if (buffer.label && debug_name_writer_.enabled()) {
         setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
@@ -327,10 +333,23 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     buffer.capacity = 0;
     buffer.size = 0;
     buffer.offset = 0;
+    buffer.created_with_extra_usage = 0;
     // Keep buffer.label intact so a subsequent resize re-establishes the recording.
 }
 
 void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink) {
+    if (deviceBuffer.buffer != VK_NULL_HANDLE &&
+        deviceBuffer.extra_usage != deviceBuffer.created_with_extra_usage) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "resizeDeviceBuffer cannot change extra VkBuffer usage after allocation (requested_usage={:#x}, created_with_usage={:#x}, buffer={:#x}, allocation={:#x}, label='{}')",
+                static_cast<uint32_t>(deviceBuffer.extra_usage),
+                static_cast<uint32_t>(deviceBuffer.created_with_extra_usage),
+                lfs::rendering::vkHandleValue(deviceBuffer.buffer),
+                lfs::rendering::vkHandleValue(deviceBuffer.allocation),
+                deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     if (deviceBuffer.capacity < new_byte_size || (!no_shrink && deviceBuffer.capacity > new_byte_size)) {
         HOST_GUARD;
         destroyBuffer(deviceBuffer);
