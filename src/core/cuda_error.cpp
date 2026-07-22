@@ -3,16 +3,20 @@
 
 #include "core/cuda_error.hpp"
 
+#include "core/device_fault.hpp"
 #include "core/environment.hpp"
+#include "core/error_codes.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <format>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -34,6 +38,73 @@ namespace lfs::core {
         std::once_flag g_sync_debug_log_once;
         std::once_flag g_failure_report_provider_once;
         std::atomic<bool> g_cuda_unavailable{false};
+        std::atomic<int> g_last_cuda_check_failure{cudaSuccess};
+        thread_local uint64_t g_lfs_launch_watermark = 0;
+
+        constexpr std::string_view kModeTokenCudaSync = "cuda-sync";
+        constexpr std::string_view kModeTokenDeviceTrap = "device-trap";
+        constexpr std::string_view kModeTokenVkFatal = "vk-fatal";
+
+        [[nodiscard]] std::string_view trim_ascii_whitespace(std::string_view value) noexcept {
+            const auto is_space = [](const char ch) noexcept {
+                return std::isspace(static_cast<unsigned char>(ch)) != 0;
+            };
+            while (!value.empty() && is_space(value.front())) {
+                value.remove_prefix(1);
+            }
+            while (!value.empty() && is_space(value.back())) {
+                value.remove_suffix(1);
+            }
+            return value;
+        }
+
+        // Recognizes the legacy boolean spellings shared with environment::flag().
+        [[nodiscard]] std::optional<bool> parse_legacy_bool_token(const std::string_view value) noexcept {
+            using environment::detail::equals_ignore_ascii_case;
+            if (equals_ignore_ascii_case(value, "1") || equals_ignore_ascii_case(value, "true") ||
+                equals_ignore_ascii_case(value, "yes") || equals_ignore_ascii_case(value, "on")) {
+                return true;
+            }
+            if (equals_ignore_ascii_case(value, "0") || equals_ignore_ascii_case(value, "false") ||
+                equals_ignore_ascii_case(value, "no") || equals_ignore_ascii_case(value, "off")) {
+                return false;
+            }
+            return std::nullopt;
+        }
+
+        struct ModeListParse {
+            unsigned modes = 0;
+            std::vector<std::string_view> unknown_tokens;
+        };
+
+        [[nodiscard]] ModeListParse parse_mode_list_tokens(const std::string_view value) {
+            using environment::detail::equals_ignore_ascii_case;
+            ModeListParse result;
+            size_t pos = 0;
+            while (pos <= value.size()) {
+                const size_t comma = value.find(',', pos);
+                const std::string_view raw_token = comma == std::string_view::npos
+                                                       ? value.substr(pos)
+                                                       : value.substr(pos, comma - pos);
+                const std::string_view token = trim_ascii_whitespace(raw_token);
+                if (!token.empty()) {
+                    if (equals_ignore_ascii_case(token, kModeTokenCudaSync)) {
+                        result.modes |= static_cast<unsigned>(DiagnosticMode::CudaSync);
+                    } else if (equals_ignore_ascii_case(token, kModeTokenDeviceTrap)) {
+                        result.modes |= static_cast<unsigned>(DiagnosticMode::DeviceTrap);
+                    } else if (equals_ignore_ascii_case(token, kModeTokenVkFatal)) {
+                        result.modes |= static_cast<unsigned>(DiagnosticMode::VkFatal);
+                    } else {
+                        result.unknown_tokens.push_back(token);
+                    }
+                }
+                if (comma == std::string_view::npos) {
+                    break;
+                }
+                pos = comma + 1;
+            }
+            return result;
+        }
 
         [[nodiscard]] uint64_t current_thread_id() noexcept {
             static thread_local const uint64_t id =
@@ -113,13 +184,13 @@ namespace lfs::core {
             }
             append_breadcrumbs(out);
             out << "Hint: CUDA reports async errors at the next sync point. Set "
-                   "LFS_CUDA_SYNC_DEBUG=1 to synchronize after every op and pinpoint the true origin.\n";
+                   "LFS_CUDA_SYNC_DEBUG=cuda-sync to synchronize after every op and pinpoint the true origin.\n";
         }
 
         void ensure_cuda_failure_report_provider_registered() {
             std::call_once(g_failure_report_provider_once, [] {
                 register_failure_report_section_provider(
-                    "CUDA runtime error", append_cuda_failure_report_sections);
+                    lfs::to_string(ErrorDomain::CUDA), append_cuda_failure_report_sections);
             });
         }
 
@@ -173,7 +244,7 @@ namespace lfs::core {
                 const std::string detail_sections = format_cuda_detail_sections(
                     state, post_sync_error, post_peek_error);
                 emit_failure_report(FailureReport{
-                    .family = "CUDA runtime error",
+                    .family = lfs::to_string(ErrorDomain::CUDA),
                     .error = error,
                     .expression = expression,
                     .message = message,
@@ -188,10 +259,10 @@ namespace lfs::core {
 
     } // namespace
 
-    void record_cuda_breadcrumb(const char* tag,
-                                const char* file,
-                                const uint32_t line,
-                                const cudaStream_t stream) noexcept {
+    uint64_t record_cuda_breadcrumb(const char* tag,
+                                    const char* file,
+                                    const uint32_t line,
+                                    const cudaStream_t stream) noexcept {
         const uint64_t sequence = g_breadcrumb_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
         BreadcrumbSlot& slot = g_breadcrumbs[(sequence - 1) % CUDA_BREADCRUMB_CAPACITY];
         slot.sequence.store(0, std::memory_order_relaxed);
@@ -201,6 +272,7 @@ namespace lfs::core {
         slot.stream.store(reinterpret_cast<uintptr_t>(stream), std::memory_order_relaxed);
         slot.thread_id.store(current_thread_id(), std::memory_order_relaxed);
         slot.sequence.store(sequence, std::memory_order_release);
+        return sequence;
     }
 
     std::vector<CudaBreadcrumb> cuda_breadcrumbs_most_recent_first() {
@@ -237,9 +309,81 @@ namespace lfs::core {
         }
     }
 
+    ParsedDiagnosticModes parse_diagnostic_modes(
+        const std::optional<std::string_view> sync_debug_value,
+        const std::optional<std::string_view> vk_validation_fatal_value) noexcept {
+        ParsedDiagnosticModes result;
+        try {
+            if (sync_debug_value) {
+                const std::string_view trimmed = trim_ascii_whitespace(*sync_debug_value);
+                if (!trimmed.empty()) {
+                    if (const auto legacy = parse_legacy_bool_token(trimmed)) {
+                        if (*legacy) {
+                            result.modes |= static_cast<unsigned>(DiagnosticMode::CudaSync);
+                        }
+                    } else {
+                        const ModeListParse parsed = parse_mode_list_tokens(trimmed);
+                        result.modes |= parsed.modes;
+                        if (!parsed.unknown_tokens.empty()) {
+                            result.unknown_tokens_present = true;
+                            for (size_t i = 0; i < parsed.unknown_tokens.size(); ++i) {
+                                if (i != 0) {
+                                    result.unknown_tokens += ", ";
+                                }
+                                result.unknown_tokens += parsed.unknown_tokens[i];
+                            }
+                        }
+                    }
+                }
+            }
+            if (vk_validation_fatal_value) {
+                const std::string_view trimmed = trim_ascii_whitespace(*vk_validation_fatal_value);
+                if (!trimmed.empty()) {
+                    result.legacy_alias_present = true;
+                    if (const auto legacy = parse_legacy_bool_token(trimmed); legacy && *legacy) {
+                        result.modes |= static_cast<unsigned>(DiagnosticMode::VkFatal);
+                    }
+                }
+            }
+        } catch (...) {
+            // Parsing must never turn a startup env-var read into a crash;
+            // fall back to whatever modes were resolved before the failure.
+        }
+        return result;
+    }
+
+    unsigned diagnostic_modes() noexcept {
+        static const unsigned modes = [] {
+            const ParsedDiagnosticModes parsed = parse_diagnostic_modes(
+                environment::value("LFS_CUDA_SYNC_DEBUG"),
+                environment::value("LFS_VK_VALIDATION_FATAL"));
+            try {
+                if (parsed.legacy_alias_present) {
+                    std::fprintf(
+                        stderr,
+                        "LFS_VK_VALIDATION_FATAL is deprecated; set LFS_CUDA_SYNC_DEBUG=vk-fatal "
+                        "(or add vk-fatal to its mode list) instead.\n");
+                }
+                if (parsed.unknown_tokens_present) {
+                    std::fprintf(
+                        stderr,
+                        "LFS_CUDA_SYNC_DEBUG: ignoring unknown mode token(s) [%s]; valid modes are "
+                        "cuda-sync, device-trap, vk-fatal.\n",
+                        parsed.unknown_tokens.c_str());
+                }
+            } catch (...) {
+            }
+            return parsed.modes;
+        }();
+        return modes;
+    }
+
+    bool diagnostic_mode_enabled(const DiagnosticMode mode) noexcept {
+        return (diagnostic_modes() & static_cast<unsigned>(mode)) != 0;
+    }
+
     bool cuda_sync_debug_enabled() noexcept {
-        static const bool enabled = environment::flag("LFS_CUDA_SYNC_DEBUG");
-        return enabled;
+        return diagnostic_mode_enabled(DiagnosticMode::CudaSync);
     }
 
     void initialize_cuda_diagnostics() noexcept {
@@ -249,7 +393,8 @@ namespace lfs::core {
                 std::call_once(g_sync_debug_log_once, [] {
                     std::fprintf(
                         stderr,
-                        "LFS_CUDA_SYNC_DEBUG=1 active: synchronizing before and after every checked CUDA operation\n");
+                        "LFS_CUDA_SYNC_DEBUG active (cuda-sync mode): synchronizing before and after "
+                        "every checked CUDA operation\n");
                 });
             }
         } catch (...) {
@@ -296,7 +441,76 @@ namespace lfs::core {
 
     void reset_cuda_diagnostics_for_testing() noexcept {
         g_cuda_unavailable.store(false, std::memory_order_relaxed);
+        g_last_cuda_check_failure.store(cudaSuccess, std::memory_order_relaxed);
+        g_lfs_launch_watermark = 0;
         reset_failure_report_dedup_for_testing();
+        // Spec §0.3 / §1.6: device-fault host registry joins the testing reset.
+        reset_device_fault_registry_for_testing();
+    }
+
+    uint64_t current_cuda_breadcrumb_sequence() noexcept {
+        return g_breadcrumb_sequence.load(std::memory_order_acquire);
+    }
+
+    cudaError_t exchange_last_cuda_check_failure(const cudaError_t native) noexcept {
+        return static_cast<cudaError_t>(
+            g_last_cuda_check_failure.exchange(static_cast<int>(native), std::memory_order_relaxed));
+    }
+
+    CudaAwaitTicket cuda_record_range(const cudaStream_t stream, const char* operation_tag) noexcept {
+        return CudaAwaitTicket{
+            .stream = reinterpret_cast<uintptr_t>(stream),
+            .first_sequence = current_cuda_breadcrumb_sequence(),
+            .operation_tag = operation_tag,
+        };
+    }
+
+    void handle_cuda_launch_check_slow_path(const cudaError_t status,
+                                            const cudaStream_t stream,
+                                            const char* tag,
+                                            const SourceSite location,
+                                            const uint64_t last_sequence) {
+        cudaError_t effective = status;
+        if (cuda_sync_debug_enabled()) {
+            const cudaError_t sync_status =
+                stream ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
+            const cudaError_t post_peek = cudaPeekAtLastError();
+            effective = status != cudaSuccess        ? status
+                        : sync_status != cudaSuccess ? sync_status
+                                                     : post_peek;
+        }
+        if (effective == cudaSuccess) {
+            return;
+        }
+        const uint64_t first_sequence = g_lfs_launch_watermark + 1;
+        g_lfs_launch_watermark = last_sequence;
+        const cudaError_t predecessor = exchange_last_cuda_check_failure(effective);
+        report_cuda_launch_check_failure(CudaFailureSeed{
+            .native = effective,
+            .predecessor = predecessor,
+            .stream = reinterpret_cast<uintptr_t>(stream),
+            .first_sequence = first_sequence,
+            .last_sequence = last_sequence,
+            .expression = tag,
+            .source = location,
+        });
+    }
+
+    void handle_cuda_await_failure(const cudaError_t status,
+                                   const CudaAwaitTicket& ticket,
+                                   const char* tag,
+                                   const SourceSite location,
+                                   const uint64_t last_sequence) {
+        const cudaError_t predecessor = exchange_last_cuda_check_failure(status);
+        report_cuda_await_failure(CudaFailureSeed{
+            .native = status,
+            .predecessor = predecessor,
+            .stream = ticket.stream,
+            .first_sequence = ticket.first_sequence,
+            .last_sequence = last_sequence,
+            .expression = tag,
+            .source = location,
+        });
     }
 
     CudaCheckState prepare_cuda_check(const char*,

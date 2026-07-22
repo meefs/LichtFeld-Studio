@@ -80,6 +80,12 @@ message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tes
 set(TEST_FILES
     test_assert_hardening.cpp
     test_cuda_error.cpp
+    test_cuda_error_typed.cpp
+    test_cuda_launch_check.cpp
+    test_tensor_launch_check.cpp
+    test_device_fault.cpp
+    device_fault_cuda_utils.cu
+    test_selection_ops.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
@@ -120,6 +126,7 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
+    test_ply_error_taxonomy.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
     test_converter_usd.cpp
@@ -135,6 +142,7 @@ set(TEST_FILES
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
+    test_crash_handler.cpp
     test_logger.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
@@ -190,6 +198,7 @@ set(TEST_FILES
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
     test_pipelined_loader.cpp
+    test_pipelined_loader_ledger.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
@@ -212,6 +221,7 @@ set(TEST_FILES
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
     test_colmap_points3d_text.cpp
+    test_colmap_binary_error_taxonomy.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rotated_sh_correctness.cpp
@@ -225,8 +235,18 @@ set(TEST_FILES
     test_tensor_memory_planner.cpp
     test_vram_profiler_metrics.cpp
     test_memory_pressure.cpp
+    test_error_core.cpp
+    test_error_reporter.cpp
+    test_error_bus.cpp
+    test_run_guarded.cpp
+    test_tcp_responder.cpp
+    test_error_envelope.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
+# Phase 7A: bounded-wait machine + SubmissionState + QW-6 (GPU-free).
+list(APPEND TEST_FILES test_vulkan_wait_bounded.cpp)
+list(APPEND TEST_FILES test_submission_state_transitions.cpp)
+list(APPEND TEST_FILES test_vksplat_failed_submit_no_publish.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
 list(APPEND TEST_FILES test_lod_page_dequant.cpp)
 list(APPEND TEST_FILES test_lod_upload_engine.cpp)
@@ -686,6 +706,34 @@ if(WIN32)
     endforeach()
 endif()
 
+# Standalone tensor launch-overhead bench (Phase 6B-2 P2 §9 pin).
+# Built with the test target; NOT registered with ctest; not part of any
+# commit list. Depends only on the public tensor API.
+add_executable(bench_tensor_launch_overhead
+    bench_tensor_launch_overhead.cpp
+)
+set_target_properties(bench_tensor_launch_overhead PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(bench_tensor_launch_overhead PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(bench_tensor_launch_overhead PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+
+# Phase 6C-P3 negative nvcc TU fixtures (Ruling 1 / §1.11) live under
+# tests/cuda_fixtures/ and are intentionally NOT listed in any target SOURCES.
+# Positive nvcc TU: device_fault_cuda_utils.cu (compiled into lichtfeld_tests;
+# includes the FOUR allowed headers and exercises DeviceFaultRecord +
+# device_fault_try_record_first). A host gtest asserts the negative fixtures
+# exist and contain the forbidden includes (see test_device_fault.cpp).
+
 # Status messages
 list(LENGTH TEST_FILES TEST_COUNT)
 
@@ -694,3 +742,5 @@ message(STATUS "  Unit tests: ${TEST_COUNT} files -> lichtfeld_tests")
 message(STATUS "  Build tests: ninja lichtfeld_tests")
 message(STATUS "  Run tests: ninja run_tests")
 message(STATUS "  Run full tests: ninja run_full_tests")
+message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead")
+message(STATUS "  Phase 6C device-fault tests: test_device_fault.cpp + device_fault_cuda_utils.cu")

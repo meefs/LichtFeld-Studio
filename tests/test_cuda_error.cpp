@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
+#include "core/device_fault.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
@@ -9,6 +10,7 @@
 #include <atomic>
 #include <gtest/gtest.h>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -143,7 +145,7 @@ namespace {
         EXPECT_EQ(report.find("CUDA device:"), std::string::npos);
         EXPECT_EQ(report.find("VRAM:"), std::string::npos);
         EXPECT_EQ(report.find("CUDA breadcrumbs (most recent first):"), std::string::npos);
-        EXPECT_EQ(report.find("LFS_CUDA_SYNC_DEBUG=1"), std::string::npos);
+        EXPECT_EQ(report.find("LFS_CUDA_SYNC_DEBUG=cuda-sync"), std::string::npos);
     }
 
     TEST_F(CudaErrorDiagnostics, SuccessfulCheckDoesNotFormatFailureContext) {
@@ -163,7 +165,7 @@ namespace {
         EXPECT_THROW(LFS_CUDA_CHECK(cudaSetDevice(-1)), std::runtime_error);
 
         const std::string report = capture.joined();
-        EXPECT_NE(report.find("Family: CUDA runtime error"), std::string::npos);
+        EXPECT_NE(report.find("Family: CUDA"), std::string::npos);
         EXPECT_NE(report.find("Error: cudaErrorInvalidDevice"), std::string::npos);
         EXPECT_NE(report.find("Failed expression: cudaSetDevice(-1)"), std::string::npos);
         EXPECT_NE(report.find("Detection site:"), std::string::npos);
@@ -173,8 +175,96 @@ namespace {
         EXPECT_NE(report.find("VRAM:"), std::string::npos);
         EXPECT_NE(report.find("Host stack trace:"), std::string::npos);
         EXPECT_NE(report.find("CUDA breadcrumbs (most recent first):"), std::string::npos);
-        EXPECT_NE(report.find("LFS_CUDA_SYNC_DEBUG=1"), std::string::npos);
+        EXPECT_NE(report.find("LFS_CUDA_SYNC_DEBUG=cuda-sync"), std::string::npos);
         (void)cudaGetLastError();
+    }
+
+    TEST(DiagnosticModeParsing, AbsentValueIsNoModes) {
+        const auto parsed = lfs::core::parse_diagnostic_modes(std::nullopt, std::nullopt);
+        EXPECT_EQ(parsed.modes, 0u);
+        EXPECT_FALSE(parsed.unknown_tokens_present);
+        EXPECT_FALSE(parsed.legacy_alias_present);
+    }
+
+    TEST(DiagnosticModeParsing, EmptyValueIsNoModes) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("", "");
+        EXPECT_EQ(parsed.modes, 0u);
+        EXPECT_FALSE(parsed.unknown_tokens_present);
+        EXPECT_FALSE(parsed.legacy_alias_present);
+    }
+
+    TEST(DiagnosticModeParsing, LegacyFalsyIsNoModes) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("0", std::nullopt);
+        EXPECT_EQ(parsed.modes, 0u);
+    }
+
+    TEST(DiagnosticModeParsing, LegacyTruthyOneMeansCudaSync) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("1", std::nullopt);
+        EXPECT_EQ(parsed.modes, static_cast<unsigned>(lfs::core::DiagnosticMode::CudaSync));
+    }
+
+    TEST(DiagnosticModeParsing, LegacyTruthyTrueMeansCudaSync) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("true", std::nullopt);
+        EXPECT_EQ(parsed.modes, static_cast<unsigned>(lfs::core::DiagnosticMode::CudaSync));
+    }
+
+    TEST(DiagnosticModeParsing, SingleModeToken) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("cuda-sync", std::nullopt);
+        EXPECT_EQ(parsed.modes, static_cast<unsigned>(lfs::core::DiagnosticMode::CudaSync));
+        EXPECT_FALSE(parsed.unknown_tokens_present);
+    }
+
+    TEST(DiagnosticModeParsing, ModeListUnionsRequestedModes) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("cuda-sync,vk-fatal", std::nullopt);
+        EXPECT_EQ(parsed.modes,
+                  static_cast<unsigned>(lfs::core::DiagnosticMode::CudaSync) |
+                      static_cast<unsigned>(lfs::core::DiagnosticMode::VkFatal));
+    }
+
+    TEST(DiagnosticModeParsing, DeviceTrapTokenIsParsedAndConsumedByLaunchPrepHelper) {
+        // device-trap still parses into DiagnosticMode::DeviceTrap (Phase 0).
+        const auto parsed = lfs::core::parse_diagnostic_modes("device-trap", std::nullopt);
+        EXPECT_EQ(parsed.modes, static_cast<unsigned>(lfs::core::DiagnosticMode::DeviceTrap));
+        // Phase 6C-P2 consumer: host launch-prep helper reads the process diagnostic
+        // bitmask once and yields trap_after_record for kernels (Ruling 1: device
+        // never parses modes). Both surfaces share the same DeviceTrap bit.
+        EXPECT_EQ(lfs::core::device_fault_trap_after_record_for_launch(),
+                  lfs::core::diagnostic_mode_enabled(lfs::core::DiagnosticMode::DeviceTrap));
+    }
+
+    TEST(DiagnosticModeParsing, UnknownTokenWarnsAndIsIgnored) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("cuda-sync,bogus-mode", std::nullopt);
+        EXPECT_EQ(parsed.modes, static_cast<unsigned>(lfs::core::DiagnosticMode::CudaSync));
+        EXPECT_TRUE(parsed.unknown_tokens_present);
+        EXPECT_NE(parsed.unknown_tokens.find("bogus-mode"), std::string::npos);
+    }
+
+    TEST(DiagnosticModeParsing, WhitespaceAroundTokensIsTrimmed) {
+        const auto parsed = lfs::core::parse_diagnostic_modes(" cuda-sync , vk-fatal ", std::nullopt);
+        EXPECT_EQ(parsed.modes,
+                  static_cast<unsigned>(lfs::core::DiagnosticMode::CudaSync) |
+                      static_cast<unsigned>(lfs::core::DiagnosticMode::VkFatal));
+        EXPECT_FALSE(parsed.unknown_tokens_present);
+    }
+
+    TEST(DiagnosticModeParsing, LegacyVkValidationFatalAliasAloneSetsVkFatal) {
+        const auto parsed = lfs::core::parse_diagnostic_modes(std::nullopt, "1");
+        EXPECT_EQ(parsed.modes, static_cast<unsigned>(lfs::core::DiagnosticMode::VkFatal));
+        EXPECT_TRUE(parsed.legacy_alias_present);
+    }
+
+    TEST(DiagnosticModeParsing, BothSpellingsSetUnionModesWithOneAliasWarning) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("cuda-sync", "1");
+        EXPECT_EQ(parsed.modes,
+                  static_cast<unsigned>(lfs::core::DiagnosticMode::CudaSync) |
+                      static_cast<unsigned>(lfs::core::DiagnosticMode::VkFatal));
+        EXPECT_TRUE(parsed.legacy_alias_present);
+    }
+
+    TEST(DiagnosticModeParsing, LegacyAliasFalsyStillWarnsButAddsNoMode) {
+        const auto parsed = lfs::core::parse_diagnostic_modes("cuda-sync", "0");
+        EXPECT_EQ(parsed.modes, static_cast<unsigned>(lfs::core::DiagnosticMode::CudaSync));
+        EXPECT_TRUE(parsed.legacy_alias_present);
     }
 
     TEST_F(CudaErrorDiagnostics, ContractReportNamesTensorCallerInStack) {

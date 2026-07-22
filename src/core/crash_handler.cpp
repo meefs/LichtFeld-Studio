@@ -3,9 +3,12 @@
 
 #include "core/crash_handler.hpp"
 
+#include "core/device_fault.hpp"
 #include "core/environment.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/pinned_memory_allocator.hpp"
+#include "core/tensor.hpp"
 
 #include <array>
 #include <cstdio>
@@ -13,6 +16,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <typeinfo>
@@ -28,7 +32,42 @@
 #endif
 
 namespace lfs::core {
+
+    void flush_diagnostics_noexcept() noexcept {
+        try {
+            Logger::get().flush();
+        } catch (...) {
+        }
+    }
+
+    void teardown_gpu_before_exit() noexcept {
+        try {
+            // Phase 6C §9 Ruling 2: drain dedicated DeviceFaultRecord slots
+            // (cudaMalloc-owned, never pool memory) BEFORE the tensor memory
+            // pool shuts down. device_fault_registry_teardown is no-throw and
+            // idempotent (LFS_CUDA_LOG_TEARDOWN on every free).
+            device_fault_registry_teardown();
+            Tensor::shutdown_memory_pool();
+            PinnedMemoryAllocator::instance().shutdown();
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): all three calls are documented no-throw
+            // today (device_fault_registry_teardown is LOG_TEARDOWN-only;
+            // shutdown_memory_pool is a guarded pointer check + already
+            // LogOnly-policy CudaMemoryPool::shutdown; PinnedMemoryAllocator::
+            // shutdown only calls its own already-LogOnly empty_cache_impl) —
+            // this is defense-in-depth for the one sanctioned pre-exit step, not
+            // a currently-reachable branch.
+        }
+    }
+
+    [[noreturn]] void flush_and_exit(const int code) noexcept {
+        flush_diagnostics_noexcept();
+        std::_Exit(code);
+    }
+
     namespace {
+
+        constexpr int EXCEPTION_FIREWALL_EXIT_CODE = 70; // EX_SOFTWARE
 
         std::filesystem::path g_crash_log_path;
         std::once_flag g_install_once;
@@ -139,7 +178,13 @@ namespace lfs::core {
         }
 #endif
 
-        [[noreturn]] void terminate_handler() noexcept {
+        // Shared by the terminate handler and the dispatch firewall: describes
+        // whatever exception is active in the calling catch block and emits it
+        // through the standard failure-report path. Best effort — swallows its
+        // own failures so callers can rely on it never throwing.
+        void report_current_exception(const std::string_view family,
+                                      const std::string_view contract,
+                                      const FailureReportSeverity severity) noexcept {
             std::string exception_type = "<no active exception>";
             std::string what;
             if (const std::exception_ptr exception = std::current_exception()) {
@@ -160,18 +205,21 @@ namespace lfs::core {
                     what.empty() ? "<unavailable>" : what);
                 emit_failure_report(
                     FailureReport{
-                        .family = "process termination",
-                        .contract = "std::terminate",
+                        .family = family,
+                        .contract = contract,
                         .expression = "uncaught exception",
                         .message = message,
                         .location = location,
-                        .stacktrace_skip_frames = 2,
+                        .stacktrace_skip_frames = 3,
                     },
-                    FailureReportSeverity::Critical);
-                Logger::get().flush();
+                    severity);
             } catch (...) {
-                // Termination diagnostics are best effort; abort remains unconditional.
             }
+        }
+
+        [[noreturn]] void terminate_handler() noexcept {
+            report_current_exception("process termination", "std::terminate", FailureReportSeverity::Critical);
+            flush_diagnostics_noexcept();
             std::abort();
         }
 
@@ -221,6 +269,16 @@ namespace lfs::core {
             const std::string path = g_crash_log_path.string();
             std::fprintf(stderr, "Crash diagnostics: %s\n", path.c_str());
         });
+    }
+
+    int run_with_exception_firewall(const std::function<int()>& fn) noexcept {
+        try {
+            return fn();
+        } catch (...) {
+            report_current_exception("process dispatch", "exception firewall", FailureReportSeverity::Error);
+            flush_diagnostics_noexcept();
+            return EXCEPTION_FIREWALL_EXIT_CODE;
+        }
     }
 
 } // namespace lfs::core

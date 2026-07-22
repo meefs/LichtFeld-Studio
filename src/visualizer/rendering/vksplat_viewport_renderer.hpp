@@ -15,6 +15,7 @@
 #include "window/vulkan_context.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -609,6 +610,9 @@ namespace lfs::vis {
         // When set, the capture rasterizer writes expected (alpha-weighted) depth.
         bool depth_capture_expected_ = false;
         std::array<std::uint64_t, kFrameRingSize> ring_completion_values_{};
+        // Phase 7C-P3: owner latch for bounded ring/readback waits. Quarantine
+        // never zeros ring_completion_values_ (would manufacture a free slot).
+        mutable std::atomic<bool> gpu_wait_quarantined_{false};
         std::size_t next_ring_slot_ = 0;
         // Whether the last main render used the macro-tile chain; the
         // selection-overlay re-render reuses its sorted buffers and must match.
@@ -617,6 +621,9 @@ namespace lfs::vis {
         // Deferred CPU count readbacks are intentionally one frame stale, so
         // selection overlays must not use buffers_.num_indices as residency state.
         std::size_t resident_sort_capacity_ = 0;
+        // Monotonic across split-panel alternation so viewport growth cannot
+        // repeatedly compound the deferred instance high-water mark.
+        std::size_t render_tile_count_high_water_ = 0;
         // The first frame after a model/input reset needs the synchronous
         // render-tile chain so the viewport never presents the macro chain's
         // zero-count warm-up frame.

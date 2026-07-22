@@ -21,6 +21,7 @@
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
 #include "vulkan_external_tensor.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_result.hpp"
 
 #include <algorithm>
@@ -38,6 +39,7 @@
 #include <optional>
 #include <source_location>
 #include <stdexcept>
+#include <stop_token>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -271,6 +273,26 @@ namespace lfs::vis {
                 details,
                 location.file_name(),
                 static_cast<int>(location.line()));
+        }
+
+        [[nodiscard]] const char* waitOutcomeLabel(
+            const lfs::rendering::WaitOutcome outcome) noexcept {
+            using lfs::rendering::WaitOutcome;
+            switch (outcome) {
+            case WaitOutcome::Ready: return "Ready";
+            case WaitOutcome::Cancelled: return "Cancelled";
+            case WaitOutcome::Shutdown: return "Shutdown";
+            case WaitOutcome::Quarantined: return "Quarantined";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] std::string formatWaitFailure(
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
+            if (outcome.has_value()) {
+                return waitOutcomeLabel(*outcome);
+            }
+            return std::string(outcome.error().detail());
         }
 
         [[nodiscard]] std::optional<std::string> validateQueueSubmit(
@@ -1826,6 +1848,7 @@ namespace lfs::vis {
         buffers_.num_splats = 0;
         buffers_.num_indices = 0;
         buffers_.num_indices_high_water = 0;
+        render_tile_count_high_water_ = 0;
         buffers_.is_unsorted_1 = true;
         resident_sort_capacity_ = 0;
         last_render_used_macro_chain_ = false;
@@ -1995,6 +2018,7 @@ namespace lfs::vis {
         macro_chain_warmup_pending_ = true;
         compose_.reset();
         buffers_ = {};
+        render_tile_count_high_water_ = 0;
         uploaded_lod_indices_ = {};
         uploaded_lod_logical_indices_ = {};
         uploaded_lod_levels_ = {};
@@ -4294,11 +4318,26 @@ namespace lfs::vis {
         wait_info.semaphoreCount = 1;
         wait_info.pSemaphores = &render_complete_timeline_;
         wait_info.pValues = &value;
-        const VkResult result = vkWaitSemaphores(context_->device(), &wait_info, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(std::format("VkSplat {} ring-slot wait failed: {}",
-                                               reason,
-                                               vkError("vkWaitSemaphores", result)));
+        // Phase 7C-P3 C7: bounded ring wait. Non-Ready leaves
+        // ring_completion_values_[slot] unchanged (no manufactured free slot).
+        lfs::rendering::WaitContext wait_ctx;
+        wait_ctx.fingerprint = "vksplat.ring_slot.wait_reuse";
+        wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+        auto wait_outcome = lfs::rendering::wait_semaphores_bounded(
+            context_->device(),
+            wait_info,
+            std::stop_token{},
+            lfs::rendering::VulkanWaitPolicy{},
+            wait_ctx);
+        if (!wait_outcome.has_value() ||
+            *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+            return std::unexpected(std::format(
+                "VkSplat {} ring-slot wait did not reach Ready (semaphore={:#x}, value={}, slot={}): {}",
+                reason,
+                lfs::rendering::vkHandleValue(render_complete_timeline_),
+                value,
+                ring_slot,
+                formatWaitFailure(wait_outcome)));
         }
         ring_completion_values_[ring_slot] = 0;
         return {};
@@ -5483,13 +5522,28 @@ namespace lfs::vis {
                 std::string_view{},
                 location));
         }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError(
-                std::format("vkWaitForFences({})", operation_label),
-                result,
-                std::string_view{},
-                location));
+        // Phase 7C-P3 C8: bounded readback fence wait. Persistent fence is
+        // retained on non-Ready (AMB-4); caller fails without manufacturing Ready.
+        {
+            lfs::rendering::WaitContext wait_ctx;
+            wait_ctx.fingerprint = "vksplat.readback.wait_fence";
+            wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+            auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                device,
+                readback_fence_,
+                std::stop_token{},
+                lfs::rendering::VulkanWaitPolicy{},
+                wait_ctx);
+            if (!wait_outcome.has_value() ||
+                *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                return std::unexpected(std::format(
+                    "VkSplat {} readback wait did not reach Ready (fence={:#x}): {} ({}:{})",
+                    operation_label,
+                    lfs::rendering::vkHandleValue(readback_fence_),
+                    formatWaitFailure(wait_outcome),
+                    location.file_name(),
+                    static_cast<int>(location.line())));
+            }
         }
         result = vmaInvalidateAllocation(
             context.allocator(), readback_staging_allocation_, 0, byte_count);
@@ -7684,6 +7738,16 @@ namespace lfs::vis {
                        ? active_splat_count
                        : active_splat_count * 4u)
                 : 0u;
+        const std::size_t num_tiles =
+            static_cast<std::size_t>(uniforms.grid_width) * static_cast<std::size_t>(uniforms.grid_height);
+        if (render_tile_count_high_water_ > 0 &&
+            num_tiles > render_tile_count_high_water_ &&
+            buffers_.num_indices_high_water > 0) {
+            buffers_.num_indices_high_water = std::min(
+                kMaxTileInstanceCount,
+                buffers_.num_indices_high_water * num_tiles / render_tile_count_high_water_);
+        }
+        render_tile_count_high_water_ = std::max(render_tile_count_high_water_, num_tiles);
         // A genuine new peak renders one capacity-clamped frame, then deferred
         // readback grows the block. Cap at INT32_MAX because the prefix scan is signed.
         const std::size_t shared_sort_capacity =
@@ -7692,8 +7756,6 @@ namespace lfs::vis {
                                buffers_.num_indices_high_water, first_frame_estimate}));
         const std::size_t num_pixels =
             static_cast<std::size_t>(uniforms.image_width) * static_cast<std::size_t>(uniforms.image_height);
-        const std::size_t num_tiles =
-            static_cast<std::size_t>(uniforms.grid_width) * static_cast<std::size_t>(uniforms.grid_height);
         bool shared_scratch_bound = false;
         std::uint64_t shared_scratch_attempt_id = 0;
         const auto shared_scratch_context = [&]() {

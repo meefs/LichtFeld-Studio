@@ -2,6 +2,7 @@
 
 #include <algorithm> // std::sort
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring> // memcpy
@@ -21,6 +22,7 @@
 
 #include "buffer.h"
 #include "rendering/vulkan_result.hpp"
+#include "rendering/vulkan_wait.hpp"
 
 class VulkanGSPipeline {
 public:
@@ -40,6 +42,15 @@ public:
     void cleanup();
     void cleanupBuffers(VulkanGSPipelineBuffers& buffers);
     void assignBufferLabels(VulkanGSPipelineBuffers& buffers);
+
+    // Phase 7A: injectable Vulkan dispatch (production default = real symbols).
+    // One seam for begin→submit path + QW-6 failed-submit tests.
+    void setVulkanDispatch(lfs::rendering::VulkanDispatch dispatch) noexcept;
+    [[nodiscard]] const lfs::rendering::VulkanDispatch& vulkanDispatch() const noexcept;
+    // Last SubmissionState snapshot after endCommandBatch's submit path
+    // (including rejected submit). Timeline publication bits must match
+    // wasTimelineSignalSubmitted.
+    [[nodiscard]] const lfs::rendering::SubmissionState& lastSubmissionState() const noexcept;
 
     void createBuffer(size_t size, _VulkanBuffer& buffer);
     void destroyBuffer(_VulkanBuffer& buffer);
@@ -160,6 +171,13 @@ protected:
     std::array<CommandBatchSlot, kCommandBatchSlotCount> command_batch_slots_{};
     std::uint32_t next_command_batch_slot_ = 0;
     std::uint32_t active_command_batch_slot_ = 0;
+
+    // Phase 7A submission bookkeeping (no-reset / no-replacement row).
+    lfs::rendering::VulkanDispatch vulkan_dispatch_{};
+    lfs::rendering::SubmissionState last_submission_state_{};
+    // Phase 7C-P3: owner latch for bounded wait quarantine (C1/C2). Never
+    // authorizes replaceFenceSignaled — policy stays NoResetNoReplacement.
+    std::atomic<bool> gpu_wait_quarantined_{false};
 
     // Vulkan objects
     VkInstance instance;
@@ -341,11 +359,13 @@ public:
                 printf("DeviceGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
-            _THROW_ERROR(std::format(
+            lfs::rendering::throw_renderer_contract(
+                std::format(
                 "DeviceGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_started_batch={})",
                 cbip,
                 pipeline->isCommandBatchInProgress(),
-                !cbip));
+                !cbip),
+                LFS_SOURCE_SITE_CURRENT());
         }
     }
 };
@@ -383,11 +403,13 @@ public:
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
             pipeline->cancelCommandBatch();
-            _THROW_ERROR(std::format(
+            lfs::rendering::throw_renderer_contract(
+                std::format(
                 "HostGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_paused_batch={})",
                 cbip,
                 pipeline->isCommandBatchInProgress(),
-                cbip));
+                cbip),
+                LFS_SOURCE_SITE_CURRENT());
         }
     }
 };
