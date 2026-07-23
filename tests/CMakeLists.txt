@@ -237,6 +237,7 @@ set(TEST_FILES
     test_tensor_discovery_fuzz.cpp
     test_mcmc_multinomial.cpp
     test_arena_metrics_contention.cpp
+    test_memory_arena_shutdown.cpp
     test_tensor_memory_planner.cpp
     test_vram_profiler_metrics.cpp
     test_memory_pressure.cpp

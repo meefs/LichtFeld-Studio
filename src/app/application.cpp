@@ -672,7 +672,11 @@ namespace lfs::app {
         });
 
         if (params->render_path) {
-            return runHeadlessRender(std::move(params));
+            const int result = runHeadlessRender(std::move(params));
+            if (result == 0) {
+                core::teardown_gpu_before_exit();
+            }
+            return result;
         }
 
         if (params->optimization.headless && params->server.tcp_connection) {

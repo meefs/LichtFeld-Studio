@@ -59,6 +59,7 @@ set(CORE_SOURCES
         error_reporter.cpp
         guarded_task.cpp
         failure_report.cpp
+        cuda/memory_arena_owner.cpp
         memory_pressure.cpp
         operator_callbacks.cpp
         animatable_property.cpp
