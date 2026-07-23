@@ -31,6 +31,7 @@
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/model_renderability.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -1294,6 +1295,14 @@ namespace lfs::vis {
             std::format("Cannot delete '{}': {}", name, trainer->getActionBlockedReason(TrainingAction::DeleteTrainingNode)));
     }
 
+    std::expected<void, std::string> SceneManager::canRemoveNode(const core::NodeId id) const {
+        const auto* node = scene_.getNodeById(id);
+        if (!node) {
+            return {};
+        }
+        return validateNodeRemoval(node->name, classifyTrainingRemovalImpact(node->name));
+    }
+
     std::expected<void, std::string> SceneManager::removeNodeImpl(const std::string& name,
                                                                   const bool keep_children,
                                                                   const HistoryMode history_mode) {
@@ -1352,12 +1361,14 @@ namespace lfs::vis {
         }
 
         const core::NodeId removed_id = scene_.getNodeIdByName(name);
+        bool removes_camera_nodes = false;
         std::vector<core::NodeId> ids_to_deselect;
         std::vector<std::string> names_to_remove;
         if (removed_id != core::NULL_NODE && !keep_children) {
             std::function<void(core::NodeId)> collect = [&](core::NodeId id) {
                 ids_to_deselect.push_back(id);
                 if (const auto* node = scene_.getNodeById(id)) {
+                    removes_camera_nodes = removes_camera_nodes || node->type == core::NodeType::CAMERA;
                     names_to_remove.push_back(node->name);
                     for (const core::NodeId child_id : node->children) {
                         collect(child_id);
@@ -1368,6 +1379,7 @@ namespace lfs::vis {
         } else if (removed_id != core::NULL_NODE) {
             ids_to_deselect.push_back(removed_id);
             names_to_remove.push_back(name);
+            removes_camera_nodes = node_to_remove->type == core::NodeType::CAMERA;
         }
 
         drainGpuForTensorRelease();
@@ -1399,6 +1411,10 @@ namespace lfs::vis {
         }
             .emit();
 
+        if (removes_camera_nodes) {
+            publishLiveCameraCount();
+        }
+
         if (scene_.getNodeCount() == 0) {
             if (!resetToEmptyState(trainer_cleared)) {
                 return std::unexpected("Cannot finish scene reset while the training worker is still stopping");
@@ -1414,8 +1430,49 @@ namespace lfs::vis {
         return {};
     }
 
+    std::expected<void, std::string> SceneManager::removePLYWithResult(const std::string& name, const bool keep_children) {
+        return removeNodeImpl(name, keep_children, HistoryMode::Record);
+    }
+
+    size_t SceneManager::publishLiveCameraCount() {
+        const size_t count = scene_.getAllCameras().size();
+        if (auto* gui = services().guiOrNull()) {
+            gui->asyncTasks().setImportNumImages(count);
+        } else {
+            auto state = app_store().import_overlay_state.get();
+            state.num_images = static_cast<std::uint64_t>(count);
+            app_store().import_overlay_state.set(std::move(state));
+        }
+        return count;
+    }
+
+    std::expected<void, std::string> SceneManager::removeNodesWithResult(const std::vector<std::string>& names,
+                                                                         const bool keep_children) {
+        std::vector<std::pair<std::string, TrainingRemovalImpact>> planned_removals;
+        planned_removals.reserve(names.size());
+
+        for (const auto& name : names) {
+            if (!scene_.getNode(name)) {
+                return std::unexpected("Node not found: " + name);
+            }
+
+            const auto impact = classifyTrainingRemovalImpact(name);
+            if (const auto result = validateNodeRemoval(name, impact); !result) {
+                return result;
+            }
+            planned_removals.emplace_back(name, impact);
+        }
+
+        for (const auto& [name, impact] : planned_removals) {
+            if (const auto result = removeNodeImpl(name, keep_children, HistoryMode::Record, impact); !result) {
+                return result;
+            }
+        }
+        return {};
+    }
+
     void SceneManager::removePLY(const std::string& name, const bool keep_children) {
-        if (const auto result = removeNodeImpl(name, keep_children, HistoryMode::Record); !result) {
+        if (const auto result = removePLYWithResult(name, keep_children); !result) {
             LOG_WARN("{}", result.error());
         }
     }
@@ -1453,10 +1510,17 @@ namespace lfs::vis {
     }
 
     void SceneManager::removeNode(const core::NodeId id, const bool keep_children) {
+        if (const auto result = removeNodeWithResult(id, keep_children); !result) {
+            LOG_WARN("{}", result.error());
+        }
+    }
+
+    std::expected<void, std::string> SceneManager::removeNodeWithResult(const core::NodeId id, const bool keep_children) {
         const auto* node = scene_.getNodeById(id);
-        if (!node)
-            return;
-        removePLY(node->name, keep_children);
+        if (!node) {
+            return {};
+        }
+        return removePLYWithResult(node->name, keep_children);
     }
 
     // ========== Node Selection ==========
