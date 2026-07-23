@@ -174,6 +174,8 @@ set(TEST_FILES
     test_gradient_accumulation.cpp
     test_image_resize_parallel.cpp
     test_tensor_slicing_safety.cpp
+    test_tensor_deferred_d1_copy_registry.cpp
+    test_tensor_deferred_d3_pin_operands.cpp
     test_tensor_lazy_ir.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
@@ -227,6 +229,8 @@ set(TEST_FILES
     test_rml_text_input_handler.cpp
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
+    test_tensor_d4_from_blob_stream.cpp
+    tensor_hardening_cuda_utils.cu
     test_cuda_event_pool.cpp
     test_tensor_multistream.cpp
     test_tensor_discovery.cpp
