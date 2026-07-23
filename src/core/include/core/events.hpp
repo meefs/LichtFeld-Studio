@@ -101,8 +101,8 @@ namespace lfs::core {
             EVENT(ApplyEllipsoid, );
             EVENT(AddCropBox, std::string node_name;);       // Add cropbox to splat node
             EVENT(AddCropEllipsoid, std::string node_name;); // Add ellipsoid to splat node
-            EVENT(ResetCropBox, );   // Reset selected cropbox
-            EVENT(ResetEllipsoid, ); // Reset selected ellipsoid
+            EVENT(ResetCropBox, );                           // Reset selected cropbox
+            EVENT(ResetEllipsoid, );                         // Reset selected ellipsoid
             EVENT(FitCropBoxToScene, bool use_percentile;);
             EVENT(FitEllipsoidToScene, bool use_percentile;);
             EVENT(ToggleCropInverse, );

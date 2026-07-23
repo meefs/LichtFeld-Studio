@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/editor_context.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
-#include "core/editor_context.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/point_cloud.hpp"
@@ -1159,7 +1159,8 @@ namespace lfs::vis {
             .crop_box = crop_box,
             .inverse = false,
             .target_node_id = static_cast<int32_t>(model_a_id),
-        }.emit();
+        }
+            .emit();
 
         model_a = scene.getMutableNode("ModelA");
         model_b = scene.getMutableNode("ModelB");
@@ -1637,7 +1638,6 @@ namespace lfs::vis {
         EXPECT_NE(scene.getNodeById(cropbox_id), nullptr);
         EXPECT_EQ(manager.getSelectedNodeName(), cropbox_name);
     }
-
 
     TEST_F(SceneManagerRenderStateTest, PointCloudRequestKeepsSingleEnabledCropBoxAfterDeselection) {
         SceneManager manager;

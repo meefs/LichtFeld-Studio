@@ -6,5 +6,5 @@
  * one C translation unit defining PL_LIBAV_IMPLEMENTATION=1; C++ users then
  * include the declarations with PL_LIBAV_IMPLEMENTATION=0. */
 #define PL_LIBAV_IMPLEMENTATION 1
-#include <vulkan/vulkan.h>
 #include <libplacebo/utils/libav.h>
+#include <vulkan/vulkan.h>

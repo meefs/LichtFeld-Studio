@@ -159,7 +159,6 @@ TEST(VideoExportUtilsTest, CaptureSnapshotKeepsPointCloudTransformWhenNoModelExi
     expect_visualizer_translation_from_data(snapshot.point_cloud_transform, {3.0f, -2.0f, 5.0f});
 }
 
-
 TEST(VideoExportUtilsTest, CaptureSnapshotKeepsPointCloudCropBoxWithoutSplatParent) {
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();

@@ -794,7 +794,7 @@ namespace lfs::vis::gui {
                 offset_x + region_width > texture_width ||
                 offset_y + region_height > texture_height ||
                 rgba_size != static_cast<std::size_t>(region_width) *
-                                   static_cast<std::size_t>(region_height) * 4u) {
+                                 static_cast<std::size_t>(region_height) * 4u) {
                 return false;
             }
             VulkanContext* const ctx = getVulkanUiTextureContext();
