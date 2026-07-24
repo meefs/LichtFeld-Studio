@@ -227,8 +227,6 @@ target_link_libraries(lfs_visualizer
         lfs_python_utils
         lfs_sequencer
         SDL3::SDL3
-        imgui::imgui
-        implot::implot
         Zep::Zep
         glm::glm
         TBB::tbb
@@ -237,6 +235,7 @@ target_link_libraries(lfs_visualizer
         OpenSSL::SSL
         OpenSSL::Crypto
         CUDA::cudart
+        Freetype::Freetype
         nfd::nfd
         vterm
         lfs_oiio

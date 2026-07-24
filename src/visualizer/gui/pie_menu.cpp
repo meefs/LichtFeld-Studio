@@ -21,7 +21,6 @@ namespace lfs::vis::gui {
     namespace {
         constexpr float PI = 3.14159265358979323846f;
         constexpr float TWO_PI = 2.0f * PI;
-        constexpr int ARC_SEGMENTS = 32;
 
         float normalizeAngle(float a) {
             a = std::fmod(a, TWO_PI);
@@ -93,73 +92,62 @@ namespace lfs::vis::gui {
             return normalizeAngle(-PI / 2.0f - sector_size / 2.0f);
         }
 
-        using lfs::rendering::OverlayColor;
-        using lfs::rendering::ScreenOverlayRenderer;
-
-        OverlayColor toOverlay(const ImVec4& color, const float alpha) {
-            return {color.x, color.y, color.z, alpha};
+        lfs::rendering::OverlayColor toOverlay(const ThemeColor& c, const float alpha_scale = 1.0f) {
+            return {c.x, c.y, c.z, c.w * alpha_scale};
         }
 
-        glm::vec2 polar(const ImVec2 center, const float radius, const float angle) {
-            return {center.x + std::cos(angle) * radius, center.y + std::sin(angle) * radius};
-        }
-
-        std::vector<glm::vec2> arcPoints(const ImVec2 center, const float radius,
-                                         const float a0, const float a1, const int segments) {
-            std::vector<glm::vec2> pts;
-            pts.reserve(static_cast<std::size_t>(segments) + 1);
+        std::vector<glm::vec2> sectorFan(const glm::vec2 center,
+                                         const float radius,
+                                         const float a0,
+                                         const float a1,
+                                         const int segments) {
+            std::vector<glm::vec2> points;
+            points.reserve(static_cast<size_t>(segments) + 2);
+            points.push_back(center);
             for (int s = 0; s <= segments; ++s) {
-                const float t = static_cast<float>(s) / static_cast<float>(segments);
-                pts.push_back(polar(center, radius, a0 + (a1 - a0) * t));
+                const float u = static_cast<float>(s) / static_cast<float>(segments);
+                const float a = a0 + (a1 - a0) * u;
+                points.push_back({center.x + std::cos(a) * radius,
+                                  center.y + std::sin(a) * radius});
             }
-            return pts;
+            return points;
         }
 
-        // Filled annular band from a0 to a1 as a quad strip (a ring sector is not
-        // convex, so a plain convex fill would be wrong).
-        void fillArcBand(ScreenOverlayRenderer& overlay, const ImVec2 center,
-                         const float inner_r, const float outer_r,
-                         const float a0, const float a1, const int segments,
-                         const OverlayColor color) {
+        void addRingSector(lfs::rendering::ScreenOverlayRenderer& overlay,
+                           const glm::vec2 center,
+                           const float inner_radius,
+                           const float outer_radius,
+                           const float a0,
+                           const float a1,
+                           const int segments,
+                           const lfs::rendering::OverlayColor color) {
             for (int s = 0; s < segments; ++s) {
-                const float t0 = static_cast<float>(s) / static_cast<float>(segments);
-                const float t1 = static_cast<float>(s + 1) / static_cast<float>(segments);
-                const float b0 = a0 + (a1 - a0) * t0;
-                const float b1 = a0 + (a1 - a0) * t1;
-                const glm::vec2 i0 = polar(center, inner_r, b0);
-                const glm::vec2 i1 = polar(center, inner_r, b1);
-                const glm::vec2 o0 = polar(center, outer_r, b0);
-                const glm::vec2 o1 = polar(center, outer_r, b1);
+                const float u0 = static_cast<float>(s) / static_cast<float>(segments);
+                const float u1 = static_cast<float>(s + 1) / static_cast<float>(segments);
+                const float p0 = a0 + (a1 - a0) * u0;
+                const float p1 = a0 + (a1 - a0) * u1;
+                const glm::vec2 i0{center.x + std::cos(p0) * inner_radius,
+                                   center.y + std::sin(p0) * inner_radius};
+                const glm::vec2 o0{center.x + std::cos(p0) * outer_radius,
+                                   center.y + std::sin(p0) * outer_radius};
+                const glm::vec2 i1{center.x + std::cos(p1) * inner_radius,
+                                   center.y + std::sin(p1) * inner_radius};
+                const glm::vec2 o1{center.x + std::cos(p1) * outer_radius,
+                                   center.y + std::sin(p1) * outer_radius};
                 overlay.addTriangleFilled(i0, o0, o1, color);
                 overlay.addTriangleFilled(i0, o1, i1, color);
             }
         }
 
-        // Triangle-fan disc. Emits Triangle commands so it stays in the same draw
-        // layer as (and under) the sector fills; CircleFilled commands render in the
-        // later UI-shape pass and would tint the fills.
-        void fillCircleFan(ScreenOverlayRenderer& overlay, const ImVec2 center,
-                           const float radius, const int segments, const OverlayColor color) {
-            const glm::vec2 c{center.x, center.y};
-            for (int s = 0; s < segments; ++s) {
-                const float b0 = TWO_PI * static_cast<float>(s) / static_cast<float>(segments);
-                const float b1 = TWO_PI * static_cast<float>(s + 1) / static_cast<float>(segments);
-                overlay.addTriangleFilled(c, polar(center, radius, b0), polar(center, radius, b1), color);
-            }
-        }
-
-        void strokeArc(ScreenOverlayRenderer& overlay, const ImVec2 center, const float radius,
-                       const float a0, const float a1, const int segments,
-                       const OverlayColor color, const float thickness) {
-            const auto pts = arcPoints(center, radius, a0, a1, segments);
-            overlay.addPolyline(pts, color, false, thickness);
-        }
-
-        void drawCenteredText(ScreenOverlayRenderer& overlay, const glm::vec2 center,
-                              const std::string& text, const OverlayColor color,
-                              const float font_size) {
-            const glm::vec2 sz = overlay.measureText(text, font_size);
-            overlay.addText({center.x - sz.x * 0.5f, center.y - sz.y * 0.5f}, text, color, font_size);
+        void addCenteredText(lfs::rendering::ScreenOverlayRenderer& overlay,
+                             const glm::vec2 center,
+                             const std::string_view text,
+                             const lfs::rendering::OverlayColor color,
+                             const float size_px) {
+            const glm::vec2 measured = overlay.measureText(text, size_px);
+            overlay.addTextWithShadow({center.x - measured.x * 0.5f,
+                                       center.y - measured.y * 0.5f},
+                                      text, color, {0.0f, 0.0f, 0.0f, 0.45f}, size_px);
         }
     } // namespace
 
@@ -167,7 +155,7 @@ namespace lfs::vis::gui {
         return getThemeDpiScale();
     }
 
-    void PieMenu::open(ImVec2 center) {
+    void PieMenu::open(glm::vec2 center) {
         center_ = center;
         open_ = true;
         hovered_sector_ = -1;
@@ -233,7 +221,7 @@ namespace lfs::vis::gui {
         }
     }
 
-    void PieMenu::onMouseMove(ImVec2 pos) {
+    void PieMenu::onMouseMove(glm::vec2 pos) {
         const float dx = pos.x - center_.x;
         const float dy = pos.y - center_.y;
         const float dist = std::sqrt(dx * dx + dy * dy);
@@ -266,7 +254,7 @@ namespace lfs::vis::gui {
         }
     }
 
-    void PieMenu::onMouseClick(ImVec2 pos) {
+    void PieMenu::onMouseClick(glm::vec2 pos) {
         onMouseMove(pos);
         if (hovered_sector_ >= 0 && hovered_sector_ < static_cast<int>(items_.size()) &&
             items_[hovered_sector_].enabled) {
@@ -347,157 +335,125 @@ namespace lfs::vis::gui {
         return std::min(static_cast<int>(relative / sub_size), sm_count - 1);
     }
 
-    void PieMenu::drawSector(ScreenOverlayRenderer& overlay, int index, float a0, float a1, float scale) const {
-        const auto& t = theme();
-        const auto& item = items_[index];
-        const float inner_r = INNER_RADIUS * scale;
-        const float outer_r = OUTER_RADIUS * scale;
-
-        OverlayColor fill_color;
-        if (!item.enabled) {
-            fill_color = toOverlay(t.palette.surface, 0.55f);
-        } else if (index == hovered_sector_) {
-            fill_color = toOverlay(t.palette.primary, 0.92f);
-        } else if (item.is_active) {
-            fill_color = toOverlay(t.palette.primary_dim, 0.80f);
-        } else {
-            fill_color = toOverlay(t.palette.surface, 0.92f);
-        }
-
-        fillArcBand(overlay, center_, inner_r, outer_r, a0, a1, ARC_SEGMENTS, fill_color);
-
-        const OverlayColor border_col = toOverlay(t.palette.border, 0.50f);
-        const float border_w = 1.0f * scale;
-        overlay.addLine(polar(center_, inner_r, a0), polar(center_, outer_r, a0),
-                        border_col, border_w);
-
-        const float mid_angle = (a0 + a1) * 0.5f;
-        const float icon_r = (inner_r + outer_r) * 0.5f;
-        const glm::vec2 icon_center = polar(center_, icon_r, mid_angle);
-
-        const OverlayColor text_col = item.enabled
-                                          ? toOverlay(t.palette.text, 1.0f)
-                                          : toOverlay(t.palette.text_dim, 0.40f);
-
-        const std::uintptr_t icon_tex = IconCache::instance().getIcon(item.icon_name);
-        const float icon_sz = ICON_SIZE * scale;
-        const float font_size = t.fonts.base_size * scale;
-
-        if (icon_tex != 0) {
-            const glm::vec2 icon_min = {icon_center.x - icon_sz * 0.5f, icon_center.y - icon_sz * 0.5f};
-            const glm::vec2 icon_max = {icon_min.x + icon_sz, icon_min.y + icon_sz};
-            overlay.addImage(icon_tex, icon_min, icon_max, text_col);
-        } else {
-            drawCenteredText(overlay, icon_center, std::string(1, item.label[0]),
-                             text_col, t.fonts.large_size * scale);
-        }
-
-        const float label_r = LABEL_RADIUS * scale;
-        drawCenteredText(overlay, polar(center_, label_r, mid_angle), item.label,
-                         text_col, font_size);
-    }
-
-    void PieMenu::drawSubmodeRing(ScreenOverlayRenderer& overlay, int sector, float scale) const {
-        const auto& t = theme();
-        const auto& item = items_[sector];
-        const int sm_count = static_cast<int>(item.submodes.size());
-        if (sm_count == 0)
-            return;
-
-        const int n = static_cast<int>(items_.size());
-        const float sector_size = TWO_PI / static_cast<float>(n);
-        const float offset = sectorAngleOffset(n);
-        const float sector_mid = offset + (static_cast<float>(sector) + 0.5f) * sector_size;
-
-        const float min_arc = SUBMODE_MIN_ARC_DEG * PI / 180.0f;
-        const float total_arc = std::max(sector_size, static_cast<float>(sm_count) * min_arc);
-        const float a0 = sector_mid - total_arc * 0.5f;
-        const float sub_size = total_arc / static_cast<float>(sm_count);
-
-        const float sm_inner = (OUTER_RADIUS + SUBMODE_GAP) * scale;
-        const float sm_outer = sm_inner + SUBMODE_WIDTH * scale;
-        const OverlayColor border_col = toOverlay(t.palette.border, 0.50f);
-        const float border_w = 1.0f * scale;
-
-        for (int si = 0; si < sm_count; ++si) {
-            const float sa0 = a0 + static_cast<float>(si) * sub_size;
-            const float sa1 = sa0 + sub_size;
-
-            OverlayColor sm_fill;
-            if (si == hovered_submode_) {
-                sm_fill = toOverlay(t.palette.primary, 0.85f);
-            } else {
-                sm_fill = toOverlay(t.palette.surface, 0.70f);
-            }
-
-            fillArcBand(overlay, center_, sm_inner, sm_outer, sa0, sa1, ARC_SEGMENTS, sm_fill);
-
-            overlay.addLine(polar(center_, sm_inner, sa0), polar(center_, sm_outer, sa0),
-                            border_col, border_w);
-
-            const float sm_mid = (sa0 + sa1) * 0.5f;
-            const float sm_r = (sm_inner + sm_outer) * 0.5f;
-            const glm::vec2 sm_center = polar(center_, sm_r, sm_mid);
-            const OverlayColor sm_text_col = toOverlay(t.palette.text, 1.0f);
-            const auto& submode = item.submodes[si];
-
-            const std::uintptr_t sm_icon =
-                submode.icon_name.empty() ? 0 : IconCache::instance().getIcon(submode.icon_name);
-            if (sm_icon != 0) {
-                const float sm_icon_sz = (sm_outer - sm_inner) * 0.65f;
-                const glm::vec2 icon_min = {sm_center.x - sm_icon_sz * 0.5f,
-                                            sm_center.y - sm_icon_sz * 0.5f};
-                const glm::vec2 icon_max = {icon_min.x + sm_icon_sz, icon_min.y + sm_icon_sz};
-                overlay.addImage(sm_icon, icon_min, icon_max, sm_text_col);
-            } else {
-                drawCenteredText(overlay, sm_center, submode.label, sm_text_col,
-                                 t.fonts.base_size * scale);
-            }
-        }
-
-        const float a1 = a0 + total_arc;
-
-        overlay.addLine(polar(center_, sm_inner, a1), polar(center_, sm_outer, a1),
-                        border_col, border_w);
-
-        strokeArc(overlay, center_, sm_outer, a0, a1, ARC_SEGMENTS, border_col, border_w);
-        strokeArc(overlay, center_, sm_inner, a0, a1, ARC_SEGMENTS, border_col, border_w);
-    }
-
-    void PieMenu::draw(ScreenOverlayRenderer& overlay) {
+    void PieMenu::draw(lfs::rendering::ScreenOverlayRenderer& overlay) {
         if (!open_ || items_.empty())
             return;
 
         const auto& t = theme();
         const float scale = dpiScale();
-        const float inner_r = INNER_RADIUS * scale;
         const float outer_r = OUTER_RADIUS * scale;
         const float dead_r = DEAD_ZONE_RADIUS * scale;
-
         const int n = static_cast<int>(items_.size());
         const float sector_size = TWO_PI / static_cast<float>(n);
         const float angle_offset = sectorAngleOffset(n);
+        const auto border_col = toOverlay(t.palette.border, 0.50f);
 
-        const glm::vec2 center{center_.x, center_.y};
-        fillCircleFan(overlay, center_, outer_r + 2.0f * scale, 64,
-                      toOverlay(t.palette.background, 0.30f));
+        overlay.addCircleFilled(center_, outer_r + 2.0f * scale,
+                                toOverlay(t.palette.background, 0.30f), 64);
 
         for (int i = 0; i < n; ++i) {
+            const auto& item = items_[i];
             const float a0 = angle_offset + static_cast<float>(i) * sector_size;
             const float a1 = a0 + sector_size;
-            drawSector(overlay, i, a0, a1, scale);
+
+            lfs::rendering::OverlayColor fill;
+            if (!item.enabled) {
+                fill = toOverlay(t.palette.surface, 0.55f);
+            } else if (i == hovered_sector_) {
+                fill = toOverlay(t.palette.primary, 0.92f);
+            } else if (item.is_active) {
+                fill = toOverlay(t.palette.primary_dim, 0.80f);
+            } else {
+                fill = toOverlay(t.palette.surface, 0.92f);
+            }
+
+            const auto points = sectorFan(center_, outer_r, a0, a1, 24);
+            overlay.addConvexPolyFilled(points, fill);
+            overlay.addLine(center_,
+                            {center_.x + std::cos(a0) * outer_r,
+                             center_.y + std::sin(a0) * outer_r},
+                            border_col, 1.0f * scale);
+
+            const float mid_angle = (a0 + a1) * 0.5f;
+            const float icon_r = (INNER_RADIUS + OUTER_RADIUS) * 0.5f * scale;
+            const glm::vec2 icon_center{
+                center_.x + std::cos(mid_angle) * icon_r,
+                center_.y + std::sin(mid_angle) * icon_r};
+            const auto text_col = item.enabled ? toOverlay(t.palette.text, 1.0f)
+                                               : toOverlay(t.palette.text_dim, 0.40f);
+
+            const std::uintptr_t icon_texture =
+                IconCache::instance().getIcon(item.icon_name);
+            if (icon_texture != 0) {
+                const float icon_size = ICON_SIZE * scale;
+                const glm::vec2 icon_min =
+                    icon_center - glm::vec2(icon_size * 0.5f);
+                overlay.addImage(icon_texture, icon_min,
+                                 icon_min + glm::vec2(icon_size), text_col);
+            } else if (!item.label.empty()) {
+                const char initial[2] = {item.label[0], '\0'};
+                addCenteredText(overlay, icon_center, initial, text_col, 16.0f * scale);
+            }
+
+            const float label_r = (OUTER_RADIUS + 18.0f) * scale;
+            const glm::vec2 label_pos{
+                center_.x + std::cos(mid_angle) * label_r,
+                center_.y + std::sin(mid_angle) * label_r};
+            addCenteredText(overlay, label_pos, item.label, text_col, 11.0f * scale);
         }
 
-        const OverlayColor border_col = toOverlay(t.palette.border, 0.50f);
-        overlay.addCircle(center, outer_r, border_col, 64, 1.0f * scale);
-        overlay.addCircle(center, inner_r, border_col, 64, 1.0f * scale);
+        overlay.addCircle(center_, outer_r, border_col, 64, 1.0f * scale);
+        overlay.addCircleFilled(center_, dead_r, toOverlay(t.palette.background, 0.55f), 32);
+        overlay.addCircle(center_, INNER_RADIUS * scale, border_col, 48, 1.0f * scale);
 
-        overlay.addCircleFilled(center, dead_r, toOverlay(t.palette.background, 0.55f), 32);
-
-        if (hovered_sector_ >= 0 && hovered_sector_ < n &&
-            !items_[hovered_sector_].submodes.empty() && items_[hovered_sector_].enabled) {
-            drawSubmodeRing(overlay, hovered_sector_, scale);
+        if (hovered_sector_ < 0 || hovered_sector_ >= n ||
+            items_[hovered_sector_].submodes.empty() || !items_[hovered_sector_].enabled) {
+            return;
         }
+
+        const auto& item = items_[hovered_sector_];
+        const int sm_count = static_cast<int>(item.submodes.size());
+        const float sector_mid = angle_offset + (static_cast<float>(hovered_sector_) + 0.5f) * sector_size;
+        const float min_arc = SUBMODE_MIN_ARC_DEG * PI / 180.0f;
+        const float total_arc = std::max(sector_size, static_cast<float>(sm_count) * min_arc);
+        const float sub_size = total_arc / static_cast<float>(sm_count);
+        const float sm_inner_radius = (OUTER_RADIUS + SUBMODE_GAP) * scale;
+        const float sm_radius = sm_inner_radius + SUBMODE_WIDTH * scale;
+        const float text_radius = (OUTER_RADIUS + SUBMODE_GAP + SUBMODE_WIDTH * 0.5f) * scale;
+        const float start = sector_mid - total_arc * 0.5f;
+
+        for (int si = 0; si < sm_count; ++si) {
+            const float a0 = start + static_cast<float>(si) * sub_size;
+            const float a1 = a0 + sub_size;
+            const auto fill = si == hovered_submode_
+                                  ? toOverlay(t.palette.primary, 0.85f)
+                                  : toOverlay(t.palette.surface, 0.70f);
+            addRingSector(overlay, center_, sm_inner_radius, sm_radius, a0, a1, 12, fill);
+            const float mid = (a0 + a1) * 0.5f;
+            const glm::vec2 item_center{
+                center_.x + std::cos(mid) * text_radius,
+                center_.y + std::sin(mid) * text_radius};
+            const auto text_color = toOverlay(t.palette.text, 1.0f);
+            const auto& submode = item.submodes[si];
+            const std::uintptr_t icon_texture =
+                submode.icon_name.empty()
+                    ? 0
+                    : IconCache::instance().getIcon(submode.icon_name);
+            if (icon_texture != 0) {
+                const float icon_size =
+                    (sm_radius - sm_inner_radius) * 0.65f;
+                const glm::vec2 icon_min =
+                    item_center - glm::vec2(icon_size * 0.5f);
+                overlay.addImage(icon_texture, icon_min,
+                                 icon_min + glm::vec2(icon_size), text_color);
+            } else {
+                addCenteredText(overlay, item_center, submode.label,
+                                text_color, 10.0f * scale);
+            }
+        }
+
+        overlay.addCircle(center_, sm_radius, border_col, 64, 1.0f * scale);
+        overlay.addCircle(center_, sm_inner_radius, border_col, 64, 1.0f * scale);
     }
 
 } // namespace lfs::vis::gui
