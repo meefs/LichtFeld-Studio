@@ -84,7 +84,9 @@ namespace lfs::python {
         Rml::Element* element = nullptr;
         std::shared_ptr<SlotEventState> events = std::make_shared<SlotEventState>();
         std::array<std::optional<std::string>, 3> content;
-        std::array<std::optional<double>, 3> numeric_content;
+        std::array<std::optional<std::string>, 3> property_content;
+        std::array<std::optional<bool>, 4> class_content;
+        std::array<std::optional<double>, 4> numeric_content;
         std::deque<float> plot_values;
         std::deque<float> plot_scratch;
         bool plot_initialized = false;

@@ -29,7 +29,9 @@
 #include <limits>
 #include <mutex>
 #include <string_view>
+#include <type_traits>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -72,6 +74,14 @@ namespace {
 
     Rml::String step_to_string(float step) {
         return Rml::String(std::format("{:.6g}", step));
+    }
+
+    Rml::String float_attribute_string(const float value) {
+        return Rml::String(std::to_string(value));
+    }
+
+    Rml::String int_attribute_string(const int value) {
+        return Rml::String(std::to_string(value));
     }
 
     void update_values_deque(nb::object values, std::deque<float>& out) {
@@ -140,6 +150,101 @@ namespace {
             element->GetAttribute<Rml::String>(name, "") == value)
             return false;
         element->SetAttribute(name, value);
+        return true;
+    }
+
+    template <typename T>
+    bool numeric_attribute_equals(const Rml::Element* element, const char* name,
+                                  const T value) {
+        assert(element);
+        if (!element->HasAttribute(name))
+            return false;
+
+        if constexpr (std::is_integral_v<T>) {
+            return element->GetAttribute<int>(name, 0) == value;
+        } else {
+            const float current = element->GetAttribute<float>(
+                name, std::numeric_limits<float>::quiet_NaN());
+            const float expected = static_cast<float>(value);
+            if (current == expected)
+                return true;
+            if (!std::isfinite(current) || !std::isfinite(expected))
+                return false;
+            const float scale =
+                std::max({1.0f, std::fabs(current), std::fabs(expected)});
+            return std::fabs(current - expected) <=
+                   std::numeric_limits<float>::epsilon() * 8.0f * scale;
+        }
+    }
+
+    template <typename T, typename Formatter>
+    bool set_numeric_attribute_if_changed(Rml::Element* element, const char* name,
+                                          const T value, Formatter&& formatter) {
+        if (numeric_attribute_equals(element, name, value))
+            return false;
+        element->SetAttribute(
+            name, std::invoke(std::forward<Formatter>(formatter), value));
+        return true;
+    }
+
+    template <typename T, typename Formatter>
+    bool set_slot_numeric_attribute_if_changed(
+        lfs::python::Slot& slot, const size_t index, Rml::Element* element,
+        const char* name, const T value, Formatter&& formatter) {
+        assert(index < slot.numeric_content.size());
+        const double numeric_value = static_cast<double>(value);
+        if (slot.numeric_content[index] &&
+            *slot.numeric_content[index] == numeric_value)
+            return false;
+        const bool changed = set_numeric_attribute_if_changed(
+            element, name, value, std::forward<Formatter>(formatter));
+        slot.numeric_content[index] = numeric_value;
+        return changed;
+    }
+
+    template <typename T, typename Formatter>
+    bool set_slot_numeric_property_if_changed(
+        lfs::python::Slot& slot, const size_t index, Rml::Element* element,
+        const char* name, const T value, Formatter&& formatter) {
+        assert(element);
+        assert(index < slot.numeric_content.size());
+        const double numeric_value = static_cast<double>(value);
+        if (slot.numeric_content[index] &&
+            *slot.numeric_content[index] == numeric_value)
+            return false;
+        element->SetProperty(
+            name, std::invoke(std::forward<Formatter>(formatter), value));
+        slot.numeric_content[index] = numeric_value;
+        return true;
+    }
+
+    bool set_slot_property_if_changed(lfs::python::Slot& slot,
+                                      const size_t index,
+                                      Rml::Element* element,
+                                      const char* name,
+                                      const Rml::String& value) {
+        assert(element);
+        assert(index < slot.property_content.size());
+        if (slot.property_content[index] &&
+            *slot.property_content[index] == value)
+            return false;
+        element->SetProperty(name, value);
+        slot.property_content[index] = value;
+        return true;
+    }
+
+    bool set_slot_class_if_changed(lfs::python::Slot& slot,
+                                   const size_t index,
+                                   Rml::Element* element,
+                                   const char* name,
+                                   const bool enabled) {
+        assert(element);
+        assert(index < slot.class_content.size());
+        if (slot.class_content[index] &&
+            *slot.class_content[index] == enabled)
+            return false;
+        element->SetClass(name, enabled);
+        slot.class_content[index] = enabled;
         return true;
     }
 
@@ -601,14 +706,16 @@ namespace lfs::python {
             auto el = doc_->CreateElement("p");
             el->SetClass("im-label", true);
             if (!css_color.empty())
-                el->SetProperty("color", Rml::String(css_color));
+                set_slot_property_if_changed(
+                    slot, 0, el.get(), "color", Rml::String(css_color));
             set_slot_text(slot, 0, el.get(), display);
             slot.element = line->AppendChild(std::move(el));
         } else {
             if (slot.element->GetParentNode() != line)
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             if (!css_color.empty())
-                slot.element->SetProperty("color", Rml::String(css_color));
+                set_slot_property_if_changed(
+                    slot, 0, slot.element, "color", Rml::String(css_color));
             set_slot_text(slot, 0, slot.element, display);
         }
         last_element_ = slot.element;
@@ -628,14 +735,16 @@ namespace lfs::python {
             el->SetClass("im-label", true);
             el->SetClass("im-label--centered", true);
             if (!css_color.empty())
-                el->SetProperty("color", Rml::String(css_color));
+                set_slot_property_if_changed(
+                    slot, 0, el.get(), "color", Rml::String(css_color));
             set_slot_text(slot, 0, el.get(), display);
             slot.element = line->AppendChild(std::move(el));
         } else {
             if (slot.element->GetParentNode() != line)
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             if (!css_color.empty())
-                slot.element->SetProperty("color", Rml::String(css_color));
+                set_slot_property_if_changed(
+                    slot, 0, slot.element, "color", Rml::String(css_color));
             set_slot_text(slot, 0, slot.element, display);
         }
         last_element_ = slot.element;
@@ -882,8 +991,8 @@ namespace lfs::python {
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
             wrapper->SetClass("im-radio", true);
-            if (selected)
-                wrapper->SetClass("selected", true);
+            set_slot_class_if_changed(
+                slot, 0, wrapper.get(), "selected", selected);
 
             auto dot = doc_->CreateElement("span");
             dot->SetClass("im-radio-dot", true);
@@ -901,7 +1010,8 @@ namespace lfs::python {
         } else {
             if (slot.element->GetParentNode() != line)
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
-            slot.element->SetClass("selected", selected);
+            set_slot_class_if_changed(
+                slot, 0, slot.element, "selected", selected);
             auto* dot = slot.element->GetChild(0);
             if (dot)
                 set_slot_text(slot, 0, dot, selected ? "\xe2\x97\x89" : "\xe2\x97\x8b");
